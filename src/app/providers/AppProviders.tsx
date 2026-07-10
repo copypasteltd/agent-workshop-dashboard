@@ -4,6 +4,7 @@ import type { PropsWithChildren } from "react";
 import { useMemo } from "react";
 import { I18nextProvider } from "react-i18next";
 import { dashboardI18n } from "../../lib/i18n";
+import { DashboardAuthBootstrap } from "./DashboardAuthBootstrap";
 
 export function AppProviders({ children }: PropsWithChildren) {
   const queryClient = useMemo(
@@ -22,7 +23,9 @@ export function AppProviders({ children }: PropsWithChildren) {
   return (
     <QueryClientProvider client={queryClient}>
       <I18nextProvider i18n={dashboardI18n}>
-        <BrowserRouter>{children}</BrowserRouter>
+        <BrowserRouter>
+          <DashboardAuthBootstrap>{children}</DashboardAuthBootstrap>
+        </BrowserRouter>
       </I18nextProvider>
     </QueryClientProvider>
   );

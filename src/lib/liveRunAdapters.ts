@@ -1,6 +1,9 @@
 import type { RunFileEntry, RunSnapshot, RunStatus } from "@lingban/contracts";
+import { resolveRunAttentionMode, resolveRunListTags } from "@lingban/domain-models";
 import type { InstanceRecord } from "../data/dashboardData";
 import { l } from "./i18n";
+import type { DashboardWorkspaceView } from "./workspaceContext";
+import { inferWorkspaceContextKey } from "./workspaceContext";
 
 function formatClock(iso: string) {
   const date = new Date(iso);
@@ -32,19 +35,17 @@ function inferWorkshopName(taskVersionId: string) {
 }
 
 function normalizeWorkspaceId(workspaceId: string) {
-  if (workspaceId.includes("harbor")) {
-    return "harbor-finance";
-  }
+  return inferWorkspaceContextKey({
+    workspaceId,
+  });
+}
 
-  if (workspaceId.includes("brand")) {
-    return "brand-lab";
-  }
+function resolveWorkshopName(snapshot: RunSnapshot) {
+  return snapshot.run.catalogMetadata?.workshopName ?? inferWorkshopName(snapshot.run.taskVersionId);
+}
 
-  if (workspaceId.includes("personal")) {
-    return "personal";
-  }
-
-  return workspaceId;
+function resolveWorkspaceContextKey(snapshot: RunSnapshot) {
+  return snapshot.run.catalogMetadata?.workspaceContextKey ?? normalizeWorkspaceId(snapshot.run.workspaceId);
 }
 
 function inferWorkspaceName(workspaceId: string) {
@@ -63,6 +64,10 @@ function inferWorkspaceName(workspaceId: string) {
   }
 
   return l("默认工作区", "Default Workspace");
+}
+
+function resolveWorkspaceName(snapshot: RunSnapshot) {
+  return snapshot.run.catalogMetadata?.workspaceContextName ?? inferWorkspaceName(snapshot.run.workspaceId);
 }
 
 function statusMeta(status: RunStatus) {
@@ -147,19 +152,28 @@ export function isLiveRunId(value: string | undefined) {
   return Boolean(value?.startsWith("run_"));
 }
 
-export function mapRunSnapshotToInstanceRecord(snapshot: RunSnapshot, liveFiles?: RunFileEntry[]): InstanceRecord {
+export function mapRunSnapshotToInstanceRecord(
+  snapshot: RunSnapshot,
+  liveFiles?: RunFileEntry[],
+  currentWorkspace?: DashboardWorkspaceView
+): InstanceRecord {
   const files = liveFiles ?? snapshot.files;
   const latestOutput = files.find((file) => !file.path.endsWith("/"));
   const status = statusMeta(snapshot.run.status);
   const latestMessage = snapshot.messages.at(-1);
   const pathOptions = collectPathOptions(snapshot.run.targetPath, files);
+  const normalizedWorkspaceId = resolveWorkspaceContextKey(snapshot);
+  const resolvedWorkspace =
+    currentWorkspace?.runtimeWorkspaceId === snapshot.run.workspaceId
+      ? currentWorkspace
+      : null;
 
   return {
     id: snapshot.run.runId,
     title: l(snapshot.run.title, snapshot.run.title),
-    workshop: inferWorkshopName(snapshot.run.taskVersionId),
-    workspaceId: normalizeWorkspaceId(snapshot.run.workspaceId),
-    workspace: inferWorkspaceName(snapshot.run.workspaceId),
+    workshop: resolveWorkshopName(snapshot),
+    workspaceId: resolvedWorkspace?.id ?? normalizedWorkspaceId,
+    workspace: resolvedWorkspace?.name ?? resolveWorkspaceName(snapshot),
     status: status.label,
     statusClass: status.className,
     targetPath: snapshot.run.targetPath,
@@ -169,6 +183,10 @@ export function mapRunSnapshotToInstanceRecord(snapshot: RunSnapshot, liveFiles?
         ? l(latestMessage.text, latestMessage.text)
         : l(snapshot.run.statusReason ?? "实例已建立，等待继续执行。", snapshot.run.statusReason ?? "Run created and waiting to continue."),
     nextAction: status.nextAction,
+    tags: resolveRunListTags(snapshot, {
+      workspaceContextKey: normalizedWorkspaceId,
+    }),
+    attentionMode: resolveRunAttentionMode(snapshot),
     metrics: [
       { label: l("当前阶段", "Current stage"), value: status.label },
       { label: l("目标路径", "Target path"), value: snapshot.run.targetPath },
@@ -184,6 +202,10 @@ export function mapRunSnapshotToInstanceRecord(snapshot: RunSnapshot, liveFiles?
             : l("系统", "System"),
       time: formatClock(message.createdAt),
       body: l(message.text, message.text),
+      attachments: message.attachments.map((attachment) => ({
+        label: attachment.label,
+        path: attachment.path,
+      })),
     })),
     overview: {
       cards: [

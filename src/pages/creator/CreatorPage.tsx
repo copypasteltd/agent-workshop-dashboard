@@ -1,11 +1,31 @@
+import type {
+  CreatorPackageDetail,
+  CreatorPackageSummary,
+  CreatorReleaseActivation,
+  CreatorReleaseGate,
+  CreatorReleaseSummary,
+  CreatorReplaySummary,
+  ServiceCatalogEntry,
+  WorkshopCatalogEntry,
+} from "@lingban/contracts";
 import { matchesSearchQuery } from "@lingban/domain-models";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import type { CreatorTab } from "../../data/dashboardData";
-import { creatorPackages, dashboardAssets, dashboardServices, dashboardWorkspaces, workshops } from "../../data/dashboardData";
+import { creatorPackages, dashboardAssets, dashboardServices, workshops } from "../../data/dashboardData";
+import { isCreatorGovernanceTarget, resolveCreatorAccessState } from "../../lib/accessControl";
+import { dashboardCatalogApi, dashboardCreatorApi } from "../../lib/api";
 import { l, t, type LocalizedString } from "../../lib/i18n";
 import { dashboardRoutes, governanceSections, isGovernanceSection, type GovernanceSection } from "../../lib/routes";
+import { listDashboardWorkspaceViews, resolveDashboardWorkspaceView } from "../../lib/workspaceContext";
+import { CreatorGovernancePanel, type GovernanceMeta } from "./CreatorGovernancePanel";
+import { CreatorReleasePanel, CreatorReplayPanel } from "./CreatorReleasePanels";
+import { useDashboardAuthStore } from "../../stores/dashboardAuthStore";
 import { useDashboardUiStore } from "../../stores/dashboardUiStore";
+
+const EMPTY_WORKSHOPS: WorkshopCatalogEntry[] = [];
+const EMPTY_SERVICES: ServiceCatalogEntry[] = [];
 
 const creatorTabs: Array<{ key: CreatorTab; label: { zh: string; en: string } }> = [
   { key: "session", label: { zh: "Session 包", en: "Session Package" } },
@@ -14,26 +34,165 @@ const creatorTabs: Array<{ key: CreatorTab; label: { zh: string; en: string } }>
   { key: "release", label: { zh: "发布审核", en: "Release & Audit" } },
 ];
 
-type GovernanceMetric = {
-  label: LocalizedString;
-  value: string;
-  note: LocalizedString;
-};
-
-type GovernanceRow = {
+type CreatorPackageView = {
   id: string;
-  tone: "" | "active" | "warn" | "success";
-  cells: [LocalizedString, LocalizedString, LocalizedString, LocalizedString];
+  title: LocalizedString;
+  source: LocalizedString;
+  status: LocalizedString;
+  statusClass: string;
+  ownerLabel: LocalizedString;
+  updatedAt: string;
+  releaseChannel: LocalizedString;
+  workspaceContextKeys: string[];
+  linkedWorkshopIds: string[];
+  linkedServiceIds: string[];
+  versionLine: string[];
+  dependencies: LocalizedString[];
+  session: { summary: LocalizedString; items: LocalizedString[] };
+  runtime: { summary: LocalizedString; items: LocalizedString[] };
+  connectors: { summary: LocalizedString; items: LocalizedString[] };
+  release: { summary: LocalizedString; items: LocalizedString[] };
 };
 
-type GovernanceMeta = {
+function mapCreatorPackageSummary(summary: CreatorPackageSummary): CreatorPackageView {
+  return {
+    id: summary.packageId,
+    title: summary.title,
+    source: summary.source,
+    status: summary.statusLabel,
+    statusClass: summary.tone,
+    ownerLabel: summary.ownerLabel,
+    updatedAt: summary.updatedAt,
+    releaseChannel: summary.releaseChannel,
+    workspaceContextKeys: summary.workspaceContextKeys,
+    linkedWorkshopIds: summary.linkedWorkshopIds,
+    linkedServiceIds: summary.linkedServiceIds,
+    versionLine: [],
+    dependencies: [],
+    session: { summary: l("", ""), items: [] },
+    runtime: { summary: l("", ""), items: [] },
+    connectors: { summary: l("", ""), items: [] },
+    release: { summary: l("", ""), items: [] },
+  };
+}
+
+function mapCreatorPackageDetail(detail: CreatorPackageDetail): CreatorPackageView {
+  return {
+    id: detail.packageId,
+    title: detail.title,
+    source: detail.source,
+    status: detail.statusLabel,
+    statusClass: detail.tone,
+    ownerLabel: detail.ownerLabel,
+    updatedAt: detail.updatedAt,
+    releaseChannel: detail.releaseChannel,
+    workspaceContextKeys: detail.workspaceContextKeys,
+    linkedWorkshopIds: detail.linkedWorkshopIds,
+    linkedServiceIds: detail.linkedServiceIds,
+    versionLine: detail.versionLine,
+    dependencies: detail.dependencies,
+    session: detail.session,
+    runtime: detail.runtime,
+    connectors: detail.connectors,
+    release: detail.release,
+  };
+}
+
+function buildFallbackCreatorPackageView(
+  packageId: string,
+  workspaceContextKey: string
+): CreatorPackageView {
+  const fallbackPackage = creatorPackages[packageId] ?? creatorPackages["chrome-tax-runner"];
+  const workspace = resolveDashboardWorkspaceView({
+    selectionId: workspaceContextKey,
+  });
+
+  return {
+    id: fallbackPackage.id,
+    title: fallbackPackage.title,
+    source: fallbackPackage.source,
+    status: fallbackPackage.status,
+    statusClass: fallbackPackage.statusClass,
+    ownerLabel: workspace.name,
+    updatedAt: "--",
+    releaseChannel: l("静态回退", "Static fallback"),
+    workspaceContextKeys: [workspace.id],
+    linkedWorkshopIds: [],
+    linkedServiceIds: [],
+    versionLine: [],
+    dependencies: [],
+    session: fallbackPackage.session,
+    runtime: fallbackPackage.runtime,
+    connectors: fallbackPackage.connectors,
+    release: fallbackPackage.release,
+  };
+}
+
+type RelatedWorkshopReference = {
+  id: string;
   title: LocalizedString;
-  summary: LocalizedString;
-  actions: LocalizedString[];
-  metrics: GovernanceMetric[];
-  headers: [LocalizedString, LocalizedString, LocalizedString, LocalizedString];
-  rows: GovernanceRow[];
 };
+
+type RelatedServiceReference = {
+  id: string;
+  name: LocalizedString;
+  targetPath: string;
+};
+
+function mapCatalogWorkshopReference(item: WorkshopCatalogEntry): RelatedWorkshopReference {
+  return {
+    id: item.workshopId,
+    title: item.displayName,
+  };
+}
+
+function mapCatalogServiceReference(item: ServiceCatalogEntry): RelatedServiceReference {
+  return {
+    id: item.serviceId,
+    name: item.displayName,
+    targetPath: item.targetPathHint,
+  };
+}
+
+function findFallbackWorkshopReference(workshopId: string): RelatedWorkshopReference | null {
+  const matched = workshops.find((item) => item.id === workshopId);
+  if (!matched) {
+    return null;
+  }
+
+  return {
+    id: matched.id,
+    title: matched.title,
+  };
+}
+
+function findFallbackServiceReference(serviceId: string): RelatedServiceReference | null {
+  const matched = dashboardServices.find((item) => item.id === serviceId);
+  if (!matched) {
+    return null;
+  }
+
+  return {
+    id: matched.id,
+    name: matched.name,
+    targetPath: matched.targetPath,
+  };
+}
+
+function buildUnresolvedWorkshopReference(workshopId: string): RelatedWorkshopReference {
+  return {
+    id: workshopId,
+    title: l(`未解析工坊 ${workshopId}`, `Unresolved workshop ${workshopId}`),
+  };
+}
+
+function buildUnresolvedServiceReference(serviceId: string): RelatedServiceReference {
+  return {
+    id: serviceId,
+    name: l(`未解析服务 ${serviceId}`, `Unresolved service ${serviceId}`),
+    targetPath: "-",
+  };
+}
 
 type CreatorOperationTone = "" | "active" | "warn" | "success";
 type CreatorActionTarget =
@@ -70,6 +229,245 @@ type CreatorOperationMeta = {
   rollout: CreatorOperationItem[];
   alerts: CreatorOperationItem[];
 };
+
+type WorkspaceChip = {
+  id: string;
+  name: LocalizedString;
+};
+
+function latestByUpdatedAt<T extends { updatedAt: string }>(items: T[]) {
+  return [...items].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] ?? null;
+}
+
+function releaseStateValue(state: CreatorReleaseSummary["state"] | null) {
+  switch (state) {
+    case "production":
+      return "Production";
+    case "staged":
+      return "Staged";
+    case "private":
+      return "Private";
+    default:
+      return "Draft";
+  }
+}
+
+function replayStateValue(state: CreatorReplaySummary["state"] | null) {
+  switch (state) {
+    case "running":
+      return "Running";
+    case "failed":
+      return "Failed";
+    case "ready":
+      return "Ready";
+    default:
+      return "None";
+  }
+}
+
+function gateHealthLabel(gates: CreatorReleaseGate[]) {
+  const failed = gates.filter((item) => item.status === "failed").length;
+  const pending = gates.filter((item) => item.status === "pending" || item.status === "running").length;
+
+  if (failed > 0) {
+    return {
+      value: `Fail ${failed}`,
+      tone: "warn" as const,
+      note: l("存在未通过的正式 Gate。", "One or more formal gates are failed."),
+    };
+  }
+
+  if (pending > 0) {
+    return {
+      value: `Pend ${pending}`,
+      tone: "active" as const,
+      note: l("仍有待处理的正式 Gate。", "One or more formal gates remain pending."),
+    };
+  }
+
+  if (gates.length > 0) {
+    return {
+      value: `Pass ${gates.length}`,
+      tone: "success" as const,
+      note: l("当前 release 的正式 Gate 已全部通过或豁免。", "All formal gates on the current release are passed or waived."),
+    };
+  }
+
+  return {
+    value: "None",
+    tone: "" as const,
+    note: l("当前 package 还没有正式 Gate 记录。", "No formal gate record exists for this package yet."),
+  };
+}
+
+function buildCreatorOperationMeta(input: {
+  pkg: CreatorPackageView;
+  releases: CreatorReleaseSummary[];
+  replays: CreatorReplaySummary[];
+  gates: CreatorReleaseGate[];
+  activations: CreatorReleaseActivation[];
+  boundWorkspaces: WorkspaceChip[];
+  relatedWorkshops: RelatedWorkshopReference[];
+  relatedServices: RelatedServiceReference[];
+}): CreatorOperationMeta {
+  const { pkg, releases, replays, gates, activations, boundWorkspaces, relatedWorkshops, relatedServices } = input;
+  const latestRelease = latestByUpdatedAt(releases);
+  const latestReplay = latestByUpdatedAt(replays);
+  const activeActivation =
+    latestByUpdatedAt(activations.filter((item) => item.state === "active")) ??
+    latestByUpdatedAt(activations);
+  const gateHealth = gateHealthLabel(gates);
+  const workspaceCount = boundWorkspaces.length;
+  const riskFocus =
+    gates.some((item) => item.status === "failed")
+      ? {
+          value: "Gate",
+          tone: "warn" as const,
+          note: l("先解决失败 Gate，再扩大发布范围。", "Resolve failed gates before widening rollout."),
+        }
+      : gates.some((item) => item.status === "pending" || item.status === "running")
+        ? {
+            value: "Review",
+            tone: "active" as const,
+            note: l("正式 Gate 仍在处理中。", "Formal gates are still in progress."),
+          }
+        : activeActivation
+          ? {
+              value: "Stable",
+              tone: "success" as const,
+              note: l("当前 release 已有激活记录。", "The current release already has an activation record."),
+            }
+          : {
+              value: "Activation",
+              tone: "warn" as const,
+              note: l("仍需完成激活或扩大灰度范围。", "Activation or wider staged rollout is still pending."),
+            };
+
+  return {
+    summary:
+      latestRelease != null
+        ? l(
+            `当前包围绕 ${pkg.releaseChannel.zh} 继续推进，实例化模板与目录暴露已经跟随正式 release / activation 计算。`,
+            `This package is moving through ${pkg.releaseChannel.en}, and both launch templates plus catalog exposure now follow formal release and activation state.`
+          )
+        : l(
+            "当前包还没有正式 release 记录。先完成基础发布，再进入灰度或正式激活。",
+            "This package has no formal release record yet. Create a release first before staged or production activation."
+          ),
+    metrics: [
+      {
+        label: l("发布状态", "Release state"),
+        value: activeActivation ? "Active" : releaseStateValue(latestRelease?.state ?? null),
+        tone: activeActivation ? "success" : latestRelease ? "active" : "warn",
+        note: activeActivation
+          ? l("存在已激活发布。", "An activation record exists for the current package.")
+          : latestRelease
+            ? l(`最新发布通道：${pkg.releaseChannel.zh}`, `Latest release channel: ${pkg.releaseChannel.en}`)
+            : l("尚未创建正式 release。", "No formal release has been created yet."),
+      },
+      {
+        label: l("回放状态", "Replay state"),
+        value: replayStateValue(latestReplay?.state ?? null),
+        tone: latestReplay?.state === "running" ? "active" : latestReplay ? "success" : "warn",
+        note: latestReplay
+          ? l(`最近回放更新时间：${latestReplay.updatedAt}`, `Latest replay updated at ${latestReplay.updatedAt}`)
+          : l("当前没有可用 replay 记录。", "No replay record is available yet."),
+      },
+      {
+        label: l("风险关注", "Risk focus"),
+        value: riskFocus.value,
+        tone: riskFocus.tone,
+        note: riskFocus.note,
+      },
+    ],
+    actions: [
+      {
+        label: l("发布", "Publish"),
+        tone: latestRelease ? "active" : "warn",
+        hint: latestRelease
+          ? l("回到发布页签查看 release/gate/activation 主链。", "Open the release tab to inspect release, gate, and activation state.")
+          : l("当前还没有 release，先创建一条正式发布记录。", "No release exists yet. Create a release record first."),
+        target: "release",
+      },
+      {
+        label: l("灰度", "Stage rollout"),
+        tone: workspaceCount > 1 ? "success" : "active",
+        hint: l("围绕工作区上下文扩展或收缩可见范围。", "Expand or shrink visibility across workspace contexts."),
+        target: "release",
+      },
+      {
+        label: l("回滚", "Rollback"),
+        tone: activeActivation ? "warn" : "",
+        hint: activeActivation
+          ? l("当前存在激活记录，回滚前先核对最新 release 与 replay。", "An activation exists. Check the latest release and replay before rollback.")
+          : l("当前没有激活记录，回滚动作会主要落在 release 版本切换。", "No active rollout exists, so rollback mostly means release-version switching."),
+        target: "debug",
+      },
+      {
+        label: l("停用", "Disable"),
+        tone: activeActivation ? "warn" : "",
+        hint: l("停用前应先检查工作区绑定与治理策略。", "Inspect workspace bindings and governance policy before disabling."),
+        target: "governance-policy",
+      },
+      {
+        label: l("调试", "Debug"),
+        tone: latestReplay ? "active" : "warn",
+        hint: latestReplay
+          ? l("进入回放链路，核对消息时序、文件差异与审批节点。", "Use replay to inspect message order, file diffs, and approval nodes.")
+          : l("当前还没有 replay 记录，建议先补一轮调试回放。", "No replay exists yet. Add a debug replay pass first."),
+        target: "debug",
+      },
+    ],
+    rollout: [
+      {
+        title: l("目录暴露与模板版本", "Catalog exposure and template version"),
+        tone: activeActivation ? "success" : latestRelease ? "active" : "warn",
+        note: activeActivation
+          ? l("实例化模板已跟随 active activation 输出。", "Launch templates already follow the active activation.")
+          : latestRelease
+            ? l("实例化模板已跟随最新 release 版本计算。", "Launch templates follow the latest release version.")
+            : l("尚未形成可消费的 release 模板。", "No consumable release template exists yet."),
+      },
+      {
+        title: l("工作区覆盖范围", "Workspace rollout scope"),
+        tone: workspaceCount > 1 ? "active" : "success",
+        note: workspaceCount > 0
+          ? l(`当前绑定 ${workspaceCount} 个工作区上下文。`, `Currently bound to ${workspaceCount} workspace contexts.`)
+          : l("当前还没有可见工作区上下文。", "No workspace context is bound yet."),
+      },
+      {
+        title: l("正式 Gate 健康度", "Formal gate health"),
+        tone: gateHealth.tone,
+        note: gateHealth.note,
+      },
+    ],
+    alerts: [
+      {
+        title: l("工坊与服务绑定", "Workshop and service bindings"),
+        tone: relatedWorkshops.length > 0 && relatedServices.length > 0 ? "success" : "warn",
+        note:
+          relatedWorkshops.length > 0 && relatedServices.length > 0
+            ? l(
+                `已绑定 ${relatedWorkshops.length} 个工坊和 ${relatedServices.length} 个服务。`,
+                `Bound to ${relatedWorkshops.length} workshops and ${relatedServices.length} services.`
+              )
+            : l("当前 package 的工坊或服务绑定仍不完整。", "Workshop or service bindings are still incomplete for this package."),
+      },
+      {
+        title: l("激活状态", "Activation status"),
+        tone: activeActivation ? "success" : latestRelease ? "warn" : "",
+        note: activeActivation
+          ? l(
+              `最新激活：${activeActivation.targetWorkspaceContextKey} / ${activeActivation.rolloutMode}`,
+              `Latest activation: ${activeActivation.targetWorkspaceContextKey} / ${activeActivation.rolloutMode}`
+            )
+          : latestRelease
+            ? l("已有 release 记录，但当前没有 active activation。", "A release exists, but no active activation is present.")
+            : l("还没有 activation 记录。", "No activation record exists yet."),
+      },
+    ],
+  };
+}
 
 const governanceMeta: Record<GovernanceSection, GovernanceMeta> = {
   credentials: {
@@ -312,325 +710,29 @@ const governanceSectionLabel: Record<GovernanceSection, { zh: string; en: string
   cost: { zh: "成本", en: "Cost" },
 };
 
-const packageMeta: Record<
-  string,
-  {
-    owner: { zh: string; en: string };
-    updatedAt: string;
-    releaseChannel: { zh: string; en: string };
-    workshopIds: string[];
-    serviceIds: string[];
-    versionLine: string[];
-    dependencies: Array<{ zh: string; en: string }>;
-  }
-> = {
-  "chrome-tax-runner": {
-    owner: { zh: "华港财务组", en: "Harbor Finance Team" },
-    updatedAt: "2026-07-07 09:54",
-    releaseChannel: { zh: "企业财税工坊 / 私有发布", en: "Enterprise tax workshop / private release" },
-    workshopIds: ["enterprise-tax"],
-    serviceIds: ["tax-filing"],
-    versionLine: ["sev_chrome_tax_runner@2026.07.1", "tsv_tax_filing@2026.07.3", "img: lingban-codex-runtime:2026.07"],
-    dependencies: [
-      { zh: "浏览器自动化 / OTP 凭证 / 审批节点", en: "Browser automation / OTP credentials / approval nodes" },
-      { zh: "受控目标路径写入：receipts / output / archive", en: "Controlled target-path writes: receipts / output / archive" },
-    ],
-  },
-  "creator-drama-suite": {
-    owner: { zh: "内容导演组", en: "Content Director Group" },
-    updatedAt: "2026-07-07 14:51",
-    releaseChannel: { zh: "Creator 工坊 / 灰度", en: "Creator workshop / staged rollout" },
-    workshopIds: ["creator-drama"],
-    serviceIds: ["drama-storyboard"],
-    versionLine: ["sev_creator_drama_suite@2026.07.2", "tsv_drama_storyboard@2026.07.4", "img: lingban-codex-runtime:2026.07"],
-    dependencies: [
-      { zh: "Seedance / 导演审稿回流 / 外部素材引用", en: "Seedance / director review callbacks / external asset references" },
-      { zh: "长对话上下文与版本回放", en: "Long-form conversation context and replay" },
-    ],
-  },
-  "brand-poster-suite": {
-    owner: { zh: "品牌内容组", en: "Brand Content Team" },
-    updatedAt: "2026-07-07 19:12",
-    releaseChannel: { zh: "品牌内容工坊 / 正式发布", en: "Brand content workshop / production" },
-    workshopIds: ["brand-poster-suite"],
-    serviceIds: ["poster-batch"],
-    versionLine: ["sev_brand_poster_suite@2026.07.5", "tsv_poster_batch@2026.07.6", "img: lingban-codex-runtime:2026.07"],
-    dependencies: [
-      { zh: "GPT Image 2 / 资产库引用 / 结果包回写", en: "GPT Image 2 / asset-library refs / bundle callback writes" },
-      { zh: "私有图像 key 只读挂载", en: "Readonly private image-key mounts" },
-    ],
-  },
-};
-
-const creatorOperationMeta: Record<string, CreatorOperationMeta> = {
-  "chrome-tax-runner": {
-    summary: l(
-      "当前更偏向企业复制与审计固化。发布动作应围绕组织模板复制、审批节点回放和 OTP 轮换检查展开。",
-      "This package is focused on enterprise replication and audit hardening. Release actions should center on workspace templating, approval replay, and OTP rotation checks."
-    ),
-    metrics: [
-      {
-        label: l("发布状态", "Release state"),
-        value: "Private",
-        tone: "success",
-        note: l("仅企业工作区可见。", "Visible only to enterprise workspaces."),
-      },
-      {
-        label: l("复制准备度", "Replication readiness"),
-        value: "82%",
-        tone: "active",
-        note: l("已固化路径与审批模板。", "Path and approval templates are already stabilized."),
-      },
-      {
-        label: l("风险关注", "Risk focus"),
-        value: "OTP",
-        tone: "warn",
-        note: l("轮换计划在 7 天内。", "Rotation plan is due within 7 days."),
-      },
-    ],
-    actions: [
-      {
-        label: l("发布", "Publish"),
-        tone: "active",
-        hint: l("回到发布页签核对交付包。", "Return to the release tab and verify the delivery bundle."),
-        target: "release",
-      },
-      {
-        label: l("灰度", "Stage rollout"),
-        tone: "success",
-        hint: l("扩到下一个企业财税工作区。", "Expand to the next enterprise tax workspace."),
-        target: "release",
-      },
-      {
-        label: l("回滚", "Rollback"),
-        tone: "warn",
-        hint: l("先看调试回放中的审批差异。", "Inspect approval diffs in debug replay first."),
-        target: "debug",
-      },
-      {
-        label: l("停用", "Disable"),
-        tone: "",
-        hint: l("停用动作应联动运行策略。", "Disabling should be coordinated with runtime policy."),
-        target: "governance-policy",
-      },
-      {
-        label: l("调试", "Debug"),
-        tone: "",
-        hint: l("直达回放，核对真实会话链路。", "Jump into replay and verify the original run chain."),
-        target: "debug",
-      },
-    ],
-    rollout: [
-      {
-        title: l("企业私有发布", "Enterprise private release"),
-        tone: "success",
-        note: l("当前仅对华港财务组开放。", "Currently exposed only to Harbor Finance Team."),
-      },
-      {
-        title: l("模板复制固化", "Template replication hardening"),
-        tone: "active",
-        note: l("审批节点、输出契约和目标路径已打包。", "Approval nodes, output contracts, and target paths are already bundled."),
-      },
-      {
-        title: l("OTP 轮换复核", "OTP rotation review"),
-        tone: "warn",
-        note: l("凭证到期前需完成一次真实回放。", "One full replay is required before the secret expires."),
-      },
-    ],
-    alerts: [
-      {
-        title: l("审计导出必保留", "Audit exports must remain enabled"),
-        tone: "success",
-        note: l("企业实例下载和审计 JSON 不能被关闭。", "Per-run downloads and audit JSON exports must stay enabled."),
-      },
-      {
-        title: l("审批节点不可裁剪", "Approval nodes cannot be trimmed"),
-        tone: "warn",
-        note: l("任何提交类动作都必须保留对话回流。", "Every submit-class action must keep the conversation callback."),
-      },
-    ],
-  },
-  "creator-drama-suite": {
-    summary: l(
-      "当前核心是把导演意见回流、长对话上下文和素材引用边界一起收敛，再决定是否进入 Creator 工坊灰度。",
-      "The current priority is to converge director feedback callbacks, long-context continuity, and asset-reference boundaries before entering creator-studio staged rollout."
-    ),
-    metrics: [
-      {
-        label: l("发布状态", "Release state"),
-        value: "Pending",
-        tone: "warn",
-        note: l("待完成脱敏与预算策略。", "Desensitization and budget policy remain pending."),
-      },
-      {
-        label: l("回放完整度", "Replay coverage"),
-        value: "74%",
-        tone: "active",
-        note: l("已覆盖导演修订主链路。", "The director-revision primary flow is already covered."),
-      },
-      {
-        label: l("风险关注", "Risk focus"),
-        value: "Assets",
-        tone: "warn",
-        note: l("外部素材引用仍需收口。", "External asset references still need tighter governance."),
-      },
-    ],
-    actions: [
-      {
-        label: l("发布", "Publish"),
-        tone: "warn",
-        hint: l("先回发布页签核对待补项。", "Return to the release tab and review remaining gaps."),
-        target: "release",
-      },
-      {
-        label: l("灰度", "Stage rollout"),
-        tone: "active",
-        hint: l("限定在 Creator 工坊内测范围。", "Limit the rollout to creator-studio preview."),
-        target: "release",
-      },
-      {
-        label: l("回滚", "Rollback"),
-        tone: "",
-        hint: l("回看分镜修订时序差异。", "Compare storyboard revision timing before rollback."),
-        target: "debug",
-      },
-      {
-        label: l("停用", "Disable"),
-        tone: "",
-        hint: l("停用前先收紧素材连接策略。", "Tighten asset-connector policy before disabling."),
-        target: "governance-policy",
-      },
-      {
-        label: l("调试", "Debug"),
-        tone: "success",
-        hint: l("查看导演意见回流与版本差异。", "Inspect director feedback callbacks and version diffs."),
-        target: "debug",
-      },
-    ],
-    rollout: [
-      {
-        title: l("Creator 工坊灰度", "Creator-studio staged rollout"),
-        tone: "active",
-        note: l("仅开放给内容导演和审稿角色。", "Only exposed to director and review roles."),
-      },
-      {
-        title: l("预算策略补全", "Budget policy completion"),
-        tone: "warn",
-        note: l("长会话与外部素材仍需额度约束。", "Long conversations and asset imports still need quota enforcement."),
-      },
-      {
-        title: l("多轮审稿模板", "Multi-pass review template"),
-        tone: "success",
-        note: l("消息流结构已经稳定。", "The message-flow structure is already stable."),
-      },
-    ],
-    alerts: [
-      {
-        title: l("素材引用边界待收口", "Asset-reference boundary still open"),
-        tone: "warn",
-        note: l("当前只记录 ref，发布前要复核引用目录。", "Only refs are stored right now; review asset paths before release."),
-      },
-      {
-        title: l("导演回流链路稳定", "Director callback chain is stable"),
-        tone: "success",
-        note: l("补充意见可直接回到同一会话流。", "Director notes already route back into the same conversation."),
-      },
-    ],
-  },
-  "brand-poster-suite": {
-    summary: l(
-      "这套包已经接近正式发布。当前更重要的是扩大品牌团队灰度范围，并把图像额度和选图回流策略写死在治理层。",
-      "This package is close to production release. The next priority is widening the brand-team rollout and hardening image quotas plus selection callbacks in governance."
-    ),
-    metrics: [
-      {
-        label: l("发布状态", "Release state"),
-        value: "Ready",
-        tone: "active",
-        note: l("可进入品牌团队正式发布。", "Ready for brand-team production release."),
-      },
-      {
-        label: l("灰度范围", "Rollout scope"),
-        value: "02",
-        tone: "success",
-        note: l("个人空间 + 品牌内容组。", "Personal workspace plus brand-content team."),
-      },
-      {
-        label: l("风险关注", "Risk focus"),
-        value: "Quota",
-        tone: "warn",
-        note: l("图像额度已使用 72%。", "Image quota has reached 72%."),
-      },
-    ],
-    actions: [
-      {
-        label: l("发布", "Publish"),
-        tone: "success",
-        hint: l("进入发布页签生成正式通道。", "Open the release tab to prepare the production channel."),
-        target: "release",
-      },
-      {
-        label: l("灰度", "Stage rollout"),
-        tone: "active",
-        hint: l("继续扩大品牌团队可见范围。", "Continue widening brand-team visibility."),
-        target: "release",
-      },
-      {
-        label: l("回滚", "Rollback"),
-        tone: "",
-        hint: l("先对比最近两次选图回写差异。", "Compare the two latest selection callbacks first."),
-        target: "debug",
-      },
-      {
-        label: l("停用", "Disable"),
-        tone: "",
-        hint: l("停用前先检查额度告警与回流目录。", "Inspect quota alerts and callback directories before disabling."),
-        target: "governance-cost",
-      },
-      {
-        label: l("调试", "Debug"),
-        tone: "",
-        hint: l("查看批量出图和结果回写时序。", "Review batch-generation and callback timing."),
-        target: "debug",
-      },
-    ],
-    rollout: [
-      {
-        title: l("品牌团队正式发布", "Brand-team production release"),
-        tone: "success",
-        note: l("具备正式渠道发布条件。", "Ready for production-channel release."),
-      },
-      {
-        title: l("图像额度治理", "Image-quota governance"),
-        tone: "warn",
-        note: l("高峰期应提前设置审批阈值。", "Approval thresholds should be enabled before peak usage."),
-      },
-      {
-        title: l("个人空间兼容", "Personal-workspace compatibility"),
-        tone: "active",
-        note: l("个人空间流程已验证。", "The personal-workspace flow is already validated."),
-      },
-    ],
-    alerts: [
-      {
-        title: l("图像额度接近阈值", "Image quota nearing threshold"),
-        tone: "warn",
-        note: l("建议在治理页启用更严格的批量轮次策略。", "Enable stricter batch-round policy in governance."),
-      },
-      {
-        title: l("结果包回写稳定", "Bundle callback is stable"),
-        tone: "success",
-        note: l("最终精选图和归档目录回写正常。", "Final picks and archive callbacks are behaving correctly."),
-      },
-    ],
-  },
-};
-
-function CreatorTabPanel() {
+function CreatorTabPanel({
+  pkg,
+  availableWorkspaceContextKeys,
+  defaultWorkspaceContextKey,
+}: {
+  pkg: CreatorPackageView;
+  availableWorkspaceContextKeys: string[];
+  defaultWorkspaceContextKey: string;
+}) {
   const lang = useDashboardUiStore((state) => state.lang);
-  const activePackageId = useDashboardUiStore((state) => state.activePackageId);
   const creatorTab = useDashboardUiStore((state) => state.creatorTab);
-  const pkg = creatorPackages[activePackageId];
+
+  if (creatorTab === "release") {
+    return (
+      <CreatorReleasePanel
+        packageId={pkg.id}
+        packageStatusClass={pkg.statusClass}
+        availableWorkspaceContextKeys={availableWorkspaceContextKeys}
+        defaultWorkspaceContextKey={defaultWorkspaceContextKey}
+      />
+    );
+  }
+
   const tabData = pkg[creatorTab];
 
   return (
@@ -659,165 +761,106 @@ function CreatorTabPanel() {
   );
 }
 
-function CreatorDebugPanel() {
-  const lang = useDashboardUiStore((state) => state.lang);
-  const activePackageId = useDashboardUiStore((state) => state.activePackageId);
-  const pkg = creatorPackages[activePackageId];
-
-  return (
-    <div className="detail-body">
-      <div className="section-head">
-        <div>
-          <div className="eyebrow">{t(lang, { zh: "调试回放", en: "Debug Replay" })}</div>
-          <div className="tab-title">{t(lang, { zh: "围绕真实 session 的运行回放", en: "Replay around the original session" })}</div>
-        </div>
-        <span className="pill warn">{t(lang, { zh: "只读", en: "Readonly" })}</span>
-      </div>
-      <div className="detail-item">
-        <div className="file-name">{pkg.id}</div>
-        <div className="meta">{t(lang, { zh: "回放保留消息顺序、审批节点、路径写入与工具调用摘要。", en: "The replay preserves message order, approval nodes, path writes, and a summary of tool calls." })}</div>
-      </div>
-      <div className="detail-item">
-        <div className="route-code">trace://{pkg.id}/timeline</div>
-        <div className="route-code">trace://{pkg.id}/tools</div>
-        <div className="route-code">trace://{pkg.id}/filesystem-diff</div>
-      </div>
-      <div className="detail-item">
-        <div className="file-name">{t(lang, { zh: "建议用途", en: "Recommended use" })}</div>
-        <div className="meta">{t(lang, { zh: "定位 session 打包前后的信息漂移、检查审批节点遗漏、核对目标路径写入。", en: "Use it to locate information drift before and after packaging, inspect missing approval nodes, and verify target-path writes." })}</div>
-      </div>
-    </div>
-  );
-}
-
-function CreatorGovernancePanel({ section }: { section: GovernanceSection }) {
-  const lang = useDashboardUiStore((state) => state.lang);
-  const meta = governanceMeta[section];
-  const [query, setQuery] = useState("");
-  const filteredRows = useMemo(() => {
-    return meta.rows.filter((row) =>
-      matchesSearchQuery(query, row.cells.flatMap((cell) =>
-        typeof cell === "string" ? [cell] : [cell.zh, cell.en]
-      ))
-    );
-  }, [meta.rows, query]);
-
-  return (
-    <div className="detail-body">
-      <div className="section-head">
-        <div>
-          <div className="eyebrow">{t(lang, { zh: "治理设置", en: "Governance" })}</div>
-          <div className="tab-title">{t(lang, meta.title)}</div>
-        </div>
-        <span className="pill active">{section}</span>
-      </div>
-      <div className="section-note">{t(lang, meta.summary)}</div>
-      <div className="quick-grid">
-        {meta.metrics.map((item) => (
-          <div className="quick-box" key={t(lang, item.label)}>
-            <div className="quick-label">{t(lang, item.label)}</div>
-            <div className="quick-value">{item.value}</div>
-            <div className="tiny-note">{t(lang, item.note)}</div>
-          </div>
-        ))}
-      </div>
-      <div className="task-row">
-        <label className="fake-input governance-search">
-          <svg
-            className="icon"
-            style={{ display: "inline-block", verticalAlign: -4, width: 14, height: 14, marginRight: 6 }}
-          >
-            <use href="#i-search" />
-          </svg>
-          <input
-            className="search-inline-input"
-            type="text"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder={t(lang, {
-              zh: "搜索当前治理页的域名、范围、状态或说明",
-              en: "Search domains, scope, state, or notes in the current governance view",
-            })}
-          />
-        </label>
-        <div className="pill-row">
-          {meta.actions.map((item) => (
-            <button className="route-btn" key={t(lang, item)} type="button">
-              {t(lang, item)}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="governance-table">
-        <div className="governance-table-head">
-          {meta.headers.map((item) => (
-            <div className="governance-cell governance-head" key={t(lang, item)}>
-              {t(lang, item)}
-            </div>
-          ))}
-        </div>
-        <div className="governance-table-body">
-          {filteredRows.map((row) => (
-            <div className="governance-row" key={row.id}>
-              <div className="governance-cell governance-primary" data-label={t(lang, meta.headers[0])}>
-                {t(lang, row.cells[0])}
-              </div>
-              <div className="governance-cell" data-label={t(lang, meta.headers[1])}>
-                {t(lang, row.cells[1])}
-              </div>
-              <div className="governance-cell" data-label={t(lang, meta.headers[2])}>
-                <span className={`pill ${row.tone}`}>
-                  {t(lang, row.cells[2])}
-                </span>
-              </div>
-              <div className="governance-cell governance-note" data-label={t(lang, meta.headers[3])}>
-                {t(lang, row.cells[3])}
-              </div>
-            </div>
-          ))}
-          {filteredRows.length === 0 ? (
-            <div className="panel-empty">
-              {t(lang, {
-                zh: "当前治理分段没有匹配项。可以清空搜索词，或切换到其他治理分段。",
-                en: "No rows match the current governance segment. Clear the query or switch to another governance section.",
-              })}
-            </div>
-          ) : null}
-        </div>
-      </div>
-    </div>
-  );
+function CreatorDebugPanel({
+  packageId,
+}: {
+  packageId: string;
+}) {
+  return <CreatorReplayPanel packageId={packageId} />;
 }
 
 function CreatorOperationsRail({
-  packageId,
+  pkg,
+  boundWorkspaces,
   relatedWorkshops,
   relatedServices,
   isGovernanceRoute,
   governanceSection,
+  canManageGovernance,
+  queriesEnabled,
 }: {
-  packageId: string;
-  relatedWorkshops: typeof workshops;
-  relatedServices: typeof dashboardServices;
+  pkg: CreatorPackageView;
+  boundWorkspaces: WorkspaceChip[];
+  relatedWorkshops: RelatedWorkshopReference[];
+  relatedServices: RelatedServiceReference[];
   isGovernanceRoute: boolean;
   governanceSection: GovernanceSection;
+  canManageGovernance: boolean;
+  queriesEnabled: boolean;
 }) {
   const navigate = useNavigate();
   const lang = useDashboardUiStore((state) => state.lang);
   const setCreatorTab = useDashboardUiStore((state) => state.setCreatorTab);
-  const meta = creatorOperationMeta[packageId] ?? creatorOperationMeta["chrome-tax-runner"];
-  const currentMeta = packageMeta[packageId as keyof typeof packageMeta] ?? packageMeta["chrome-tax-runner"];
-  const boundWorkspaces = dashboardWorkspaces.filter((item) => item.packageIds.includes(packageId));
+  const releasesQuery = useQuery({
+    queryKey: ["dashboard", "creator", "package", pkg.id, "releases"],
+    queryFn: async () => dashboardCreatorApi.listPackageReleases(pkg.id),
+    enabled: queriesEnabled,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const replaysQuery = useQuery({
+    queryKey: ["dashboard", "creator", "package", pkg.id, "replays"],
+    queryFn: async () => dashboardCreatorApi.listPackageReplays(pkg.id),
+    enabled: queriesEnabled,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const latestRelease = useMemo(
+    () => latestByUpdatedAt(releasesQuery.data ?? []),
+    [releasesQuery.data]
+  );
+  const gatesQuery = useQuery({
+    queryKey: ["dashboard", "creator", "release", latestRelease?.releaseId ?? null, "gates"],
+    queryFn: async () => dashboardCreatorApi.listReleaseGates(latestRelease!.releaseId),
+    enabled: queriesEnabled && latestRelease != null,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const activationsQuery = useQuery({
+    queryKey: ["dashboard", "creator", "release", latestRelease?.releaseId ?? null, "activations"],
+    queryFn: async () => dashboardCreatorApi.listReleaseActivations(latestRelease!.releaseId),
+    enabled: queriesEnabled && latestRelease != null,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const meta = useMemo(
+    () =>
+      buildCreatorOperationMeta({
+        pkg,
+        releases: releasesQuery.data ?? [],
+        replays: replaysQuery.data ?? [],
+        gates: gatesQuery.data ?? [],
+        activations: activationsQuery.data ?? [],
+        boundWorkspaces,
+        relatedWorkshops,
+        relatedServices,
+      }),
+    [
+      activationsQuery.data,
+      boundWorkspaces,
+      gatesQuery.data,
+      pkg,
+      relatedServices,
+      relatedWorkshops,
+      releasesQuery.data,
+      replaysQuery.data,
+    ]
+  );
+  const cadenceTimestamp = latestRelease?.updatedAt ?? pkg.updatedAt;
 
   const handleAction = (target: CreatorActionTarget) => {
+    if (isCreatorGovernanceTarget(target) && !canManageGovernance) {
+      return;
+    }
+
     if (target === "release") {
       setCreatorTab("release");
-      navigate(dashboardRoutes.creatorPackage(packageId));
+      navigate(dashboardRoutes.creatorPackage(pkg.id));
       return;
     }
 
     if (target === "debug") {
-      navigate(dashboardRoutes.creatorDebug(packageId));
+      navigate(dashboardRoutes.creatorDebug(pkg.id));
       return;
     }
 
@@ -842,7 +885,7 @@ function CreatorOperationsRail({
             <div className="eyebrow">{t(lang, { zh: "右栏操作区", en: "Action Rail" })}</div>
             <div className="detail-title">{t(lang, { zh: "发布 / 回滚 / 灰度 / 停用", en: "Publish / Rollback / Rollout / Disable" })}</div>
           </div>
-          <span className="pill active">{packageId}</span>
+          <span className="pill active">{pkg.id}</span>
         </div>
         <div className="section-note">{t(lang, meta.summary)}</div>
         <div className="creator-rail-metrics">
@@ -860,6 +903,7 @@ function CreatorOperationsRail({
               className={`action-btn ${item.tone}`}
               key={t(lang, item.label)}
               type="button"
+              disabled={isCreatorGovernanceTarget(item.target) && !canManageGovernance}
               onClick={() => handleAction(item.target)}
             >
               <div className="file-name">{t(lang, item.label)}</div>
@@ -871,11 +915,11 @@ function CreatorOperationsRail({
 
       <article className="detail-card creator-ops-card">
         <div className="section-head">
-          <div>
-            <div className="eyebrow">{t(lang, { zh: "发布节奏", en: "Release cadence" })}</div>
-            <div className="detail-title">{t(lang, { zh: "灰度与回放检查点", en: "Rollout and replay checkpoints" })}</div>
-          </div>
-          <span className="pill">{currentMeta.updatedAt}</span>
+            <div>
+              <div className="eyebrow">{t(lang, { zh: "发布节奏", en: "Release cadence" })}</div>
+              <div className="detail-title">{t(lang, { zh: "灰度与回放检查点", en: "Rollout and replay checkpoints" })}</div>
+            </div>
+          <span className="pill">{cadenceTimestamp}</span>
         </div>
         <div className="detail-body">
           {meta.rollout.map((item) => (
@@ -901,7 +945,7 @@ function CreatorOperationsRail({
         <div className="detail-body">
           <div className="detail-item">
             <div className="file-name">{t(lang, { zh: "发布通道", en: "Release channel" })}</div>
-            <div className="meta">{t(lang, currentMeta.releaseChannel)}</div>
+            <div className="meta">{t(lang, pkg.releaseChannel)}</div>
           </div>
           <div className="detail-item">
             <div className="file-name">{t(lang, { zh: "绑定工作区", en: "Bound workspaces" })}</div>
@@ -950,16 +994,17 @@ function CreatorOperationsRail({
             <span className="pill warn">{t(lang, governanceSectionLabel[governanceSection])}</span>
           </div>
           <div className="pill-row">
-            {governanceSections.map((item) => (
-              <button
-                className={`path-chip ${item === governanceSection ? "active" : ""}`}
-                key={item}
-                type="button"
-                onClick={() => navigate(dashboardRoutes.creatorGovernance(item))}
-              >
-                {t(lang, governanceSectionLabel[item])}
-              </button>
-            ))}
+              {governanceSections.map((item) => (
+                <button
+                  className={`path-chip ${item === governanceSection ? "active" : ""}`}
+                  key={item}
+                  type="button"
+                  disabled={!canManageGovernance}
+                  onClick={() => navigate(dashboardRoutes.creatorGovernance(item))}
+                >
+                  {t(lang, governanceSectionLabel[item])}
+                </button>
+              ))}
           </div>
           <div className="section-note">
             {t(lang, {
@@ -968,13 +1013,28 @@ function CreatorOperationsRail({
             })}
           </div>
           <div className="panel-inline-actions">
-            <button className="route-btn" type="button" onClick={() => handleAction("governance-policy")}>
+            <button
+              className="route-btn"
+              type="button"
+              disabled={!canManageGovernance}
+              onClick={() => handleAction("governance-policy")}
+            >
               {t(lang, { zh: "运行策略", en: "Runtime policy" })}
             </button>
-            <button className="route-btn" type="button" onClick={() => handleAction("governance-audit")}>
+            <button
+              className="route-btn"
+              type="button"
+              disabled={!canManageGovernance}
+              onClick={() => handleAction("governance-audit")}
+            >
               {t(lang, { zh: "审计中心", en: "Audit center" })}
             </button>
-            <button className="route-btn active" type="button" onClick={() => handleAction("governance-cost")}>
+            <button
+              className="route-btn active"
+              type="button"
+              disabled={!canManageGovernance}
+              onClick={() => handleAction("governance-cost")}
+            >
               {t(lang, { zh: "成本治理", en: "Cost governance" })}
             </button>
           </div>
@@ -992,22 +1052,113 @@ export function CreatorPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "success" | "warn" | "active">("all");
   const currentWorkspaceId = useDashboardUiStore((state) => state.currentWorkspaceId);
+  const authMode = useDashboardAuthStore((state) => state.authMode);
+  const authenticated = useDashboardAuthStore((state) => state.authenticated);
+  const authWorkspaces = useDashboardAuthStore((state) => state.workspaces);
+  const authCurrentWorkspace = useDashboardAuthStore((state) => state.currentWorkspace);
   const activePackageId = useDashboardUiStore((state) => state.activePackageId);
   const setActivePackageId = useDashboardUiStore((state) => state.setActivePackageId);
   const creatorTab = useDashboardUiStore((state) => state.creatorTab);
   const setCreatorTab = useDashboardUiStore((state) => state.setCreatorTab);
-  const currentWorkspace =
-    dashboardWorkspaces.find((item) => item.id === currentWorkspaceId) ?? dashboardWorkspaces[0];
+  const currentWorkspace = useMemo(
+    () =>
+      resolveDashboardWorkspaceView({
+        selectionId: currentWorkspaceId,
+        workspaces: authMode === "required" ? authWorkspaces : undefined,
+        fallbackWorkspaceId: authCurrentWorkspace?.workspaceId,
+      }),
+    [authCurrentWorkspace?.workspaceId, authMode, authWorkspaces, currentWorkspaceId]
+  );
+  const workspaceViews = useMemo(
+    () => listDashboardWorkspaceViews(authMode === "required" ? authWorkspaces : undefined),
+    [authMode, authWorkspaces]
+  );
+  const creatorAccess = useMemo(
+    () =>
+      resolveCreatorAccessState({
+        authMode,
+        authenticated,
+        workspace: currentWorkspace,
+      }),
+    [authMode, authenticated, currentWorkspace]
+  );
+  const previewMode = authMode !== "required";
+  const dataQueriesEnabled = authMode === "required" && authenticated && creatorAccess.canAccessCreator;
+  const packagesQuery = useQuery({
+    queryKey: [
+      "dashboard",
+      "creator",
+      "packages",
+      currentWorkspace.selectionId,
+      currentWorkspace.id,
+    ],
+    queryFn: async () =>
+      dashboardCreatorApi.listPackages({
+        workspaceContextKey: currentWorkspace.id,
+      }),
+    enabled: dataQueriesEnabled,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const packageDetailQuery = useQuery({
+    queryKey: ["dashboard", "creator", "package", activePackageId],
+    queryFn: async () => {
+      if (!activePackageId) {
+        return null;
+      }
+
+      return dashboardCreatorApi.getPackage(activePackageId);
+    },
+    enabled: dataQueriesEnabled && Boolean(activePackageId),
+    retry: false,
+    staleTime: 30_000,
+  });
+  const workshopsQuery = useQuery({
+    queryKey: ["dashboard", "catalog", "workshops", currentWorkspace.id],
+    queryFn: async () =>
+      dashboardCatalogApi.listWorkshops({
+        workspaceContextKey: currentWorkspace.id,
+      }),
+    enabled: dataQueriesEnabled,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const servicesQuery = useQuery({
+    queryKey: ["dashboard", "catalog", "services", currentWorkspace.id],
+    queryFn: async () =>
+      dashboardCatalogApi.listServices({
+        workspaceContextKey: currentWorkspace.id,
+      }),
+    enabled: dataQueriesEnabled,
+    retry: false,
+    staleTime: 30_000,
+  });
 
   const isDebugRoute = location.pathname.endsWith("/debug");
   const isGovernanceRoute = location.pathname.includes("/creator/governance");
   const governanceSection = isGovernanceSection(section) ? section : "credentials";
-  const visiblePackages = Object.values(creatorPackages).filter((item) =>
-    currentWorkspace.packageIds.includes(item.id)
+  const visiblePackages = useMemo(
+    () =>
+      previewMode
+        ? currentWorkspace.packageIds.map((item) =>
+            buildFallbackCreatorPackageView(item, currentWorkspace.id)
+          )
+        : creatorAccess.canAccessCreator
+          ? (packagesQuery.data ?? []).map(mapCreatorPackageSummary)
+          : [],
+    [
+      creatorAccess.canAccessCreator,
+      currentWorkspace.id,
+      currentWorkspace.packageIds,
+      packagesQuery.data,
+      previewMode,
+    ]
   );
+  const routePackage = packageId
+    ? visiblePackages.find((item) => item.id === packageId) ?? null
+    : null;
   const filteredPackages = useMemo(() => {
     return visiblePackages.filter((item) => {
-      const meta = packageMeta[item.id as keyof typeof packageMeta];
       const statusMatched = statusFilter === "all" || item.statusClass === statusFilter;
 
       if (!statusMatched) {
@@ -1022,18 +1173,27 @@ export function CreatorPage() {
         item.source.en,
         item.status.zh,
         item.status.en,
-        meta?.owner.zh,
-        meta?.owner.en,
-        meta?.releaseChannel.zh,
-        meta?.releaseChannel.en,
-        ...(meta?.versionLine ?? []),
+        item.ownerLabel.zh,
+        item.ownerLabel.en,
+        item.releaseChannel.zh,
+        item.releaseChannel.en,
+        ...item.versionLine,
       ]);
     });
   }, [searchQuery, statusFilter, visiblePackages]);
 
   useEffect(() => {
-    if (packageId && creatorPackages[packageId] && currentWorkspace.packageIds.includes(packageId)) {
-      setActivePackageId(packageId);
+    if (routePackage) {
+      if (routePackage.id !== activePackageId) {
+        setActivePackageId(routePackage.id);
+      }
+      return;
+    }
+
+    if (packageId) {
+      if (activePackageId) {
+        setActivePackageId("");
+      }
       return;
     }
 
@@ -1043,24 +1203,300 @@ export function CreatorPage() {
       if (!isGovernanceRoute) {
         navigate(dashboardRoutes.creatorPackage(fallbackPackage.id), { replace: true });
       }
+      return;
+    }
+
+    if (!fallbackPackage && activePackageId) {
+      setActivePackageId("");
     }
   }, [
     activePackageId,
-    currentWorkspace,
     isGovernanceRoute,
     navigate,
     packageId,
+    routePackage,
     setActivePackageId,
     visiblePackages,
   ]);
 
-  const pkg = creatorPackages[activePackageId] ?? visiblePackages[0] ?? creatorPackages["chrome-tax-runner"];
-  const currentMeta = packageMeta[pkg.id as keyof typeof packageMeta];
-  const relatedWorkshops = workshops.filter((item) => currentMeta?.workshopIds.includes(item.id));
-  const relatedServices = dashboardServices.filter((item) => currentMeta?.serviceIds.includes(item.id));
+  const selectedVisiblePackage = visiblePackages.find((item) => item.id === activePackageId) ?? null;
+  const pkg =
+    (packageDetailQuery.data ? mapCreatorPackageDetail(packageDetailQuery.data) : null) ??
+    selectedVisiblePackage ??
+    visiblePackages[0] ??
+    null;
+  const catalogWorkshops = workshopsQuery.data ?? EMPTY_WORKSHOPS;
+  const catalogServices = servicesQuery.data ?? EMPTY_SERVICES;
+  const allowStaticCatalogFallback = previewMode || currentWorkspace.source !== "auth";
+  const relatedWorkshops = useMemo(
+    () =>
+      pkg == null
+        ? []
+        : pkg.linkedWorkshopIds.map((workshopId) => {
+            const catalogMatch = catalogWorkshops.find((item) => item.workshopId === workshopId);
+            if (catalogMatch) {
+              return mapCatalogWorkshopReference(catalogMatch);
+            }
+
+            return allowStaticCatalogFallback
+              ? findFallbackWorkshopReference(workshopId) ?? buildUnresolvedWorkshopReference(workshopId)
+              : buildUnresolvedWorkshopReference(workshopId);
+          }),
+    [allowStaticCatalogFallback, catalogWorkshops, pkg]
+  );
+  const relatedServices = useMemo(
+    () =>
+      pkg == null
+        ? []
+        : pkg.linkedServiceIds.map((serviceId) => {
+            const catalogMatch = catalogServices.find((item) => item.serviceId === serviceId);
+            if (catalogMatch) {
+              return mapCatalogServiceReference(catalogMatch);
+            }
+
+            return allowStaticCatalogFallback
+              ? findFallbackServiceReference(serviceId) ?? buildUnresolvedServiceReference(serviceId)
+              : buildUnresolvedServiceReference(serviceId);
+          }),
+    [allowStaticCatalogFallback, catalogServices, pkg]
+  );
+  const boundWorkspaces = useMemo(
+    () => (pkg == null ? [] : workspaceViews.filter((item) => pkg.workspaceContextKeys.includes(item.id))),
+    [pkg, workspaceViews]
+  );
+  const visibleWorkshopCount = previewMode
+    ? currentWorkspace.workshopIds.length
+    : workshopsQuery.data?.length ?? 0;
+  const pendingAuditCount = visiblePackages.filter((item) => item.statusClass === "warn").length;
+  const creatorAccessNote =
+    creatorAccess.reason === "membership-suspended"
+      ? t(lang, {
+          zh: "当前工作区成员资格已暂停，Creator 包、发布与治理入口已锁定。",
+          en: "Workspace membership is suspended, so Creator packages, release actions, and governance are locked.",
+        })
+      : t(lang, {
+          zh: "当前工作区角色不具备 Creator 访问权限。请切换到具备 Creator 角色的工作区，或联系管理员调整成员角色。",
+          en: "The current workspace role does not include Creator access. Switch to a workspace with Creator rights or ask an admin to update your membership.",
+        });
+  const governanceAccessNote = t(lang, {
+    zh: "当前工作区允许浏览 Creator 包与回放信息，但治理动作只对 Owner / Admin 开放。",
+    en: "This workspace can browse Creator packages and replay data, but governance actions are restricted to Owner and Admin roles.",
+  });
+
+  if (!creatorAccess.canAccessCreator) {
+    return (
+      <section className="view" data-testid="dashboard-creator-page">
+        <article className="hero-card">
+          <div className="section-head">
+            <div>
+              <div className="eyebrow">{t(lang, { zh: "Creator 工作台", en: "Creator Studio" })}</div>
+              <h2 className="hero-title">
+                {t(lang, {
+                  zh: "当前工作区没有 Creator 访问权限",
+                  en: "Creator access is unavailable in this workspace",
+                })}
+              </h2>
+            </div>
+            <span className="pill warn">{t(lang, currentWorkspace.name)}</span>
+          </div>
+          <div className="section-note">{creatorAccessNote}</div>
+          <div className="metric-grid">
+            {[
+              {
+                label: { zh: "当前角色", en: "Current role" },
+                value: currentWorkspace.role ? currentWorkspace.role.toUpperCase() : "--",
+                note: { zh: "角色决定 Creator 包与治理可见范围。", en: "Role determines Creator package and governance scope." },
+              },
+              {
+                label: { zh: "工作区根路径", en: "Workspace root" },
+                value: currentWorkspace.root,
+                note: { zh: "切换工作区会同步切换实例、文件与 Creator 边界。", en: "Switching workspaces also switches runs, files, and Creator boundaries." },
+              },
+              {
+                label: { zh: "成员状态", en: "Membership" },
+                value: currentWorkspace.membershipStatus ?? "active",
+                note: { zh: "暂停成员不会进入 Creator 域。", en: "Suspended memberships never enter the Creator domain." },
+              },
+            ].map((item) => (
+              <div className="metric-card" key={t(lang, item.label)}>
+                <div className="metric-label">{t(lang, item.label)}</div>
+                <div className="metric-value">{item.value}</div>
+                <div className="tiny-note">{t(lang, item.note)}</div>
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <div className="creator-layout">
+          <div className="conversation-stack">
+            <article className="package-card">
+              <div className="list-title">
+                {t(lang, { zh: "当前空间边界", en: "Current workspace boundary" })}
+              </div>
+              <div className="section-note">{t(lang, currentWorkspace.meta)}</div>
+              <div className="meta">{currentWorkspace.root}</div>
+            </article>
+          </div>
+
+          <div className="detail-stack">
+            <article className="detail-card">
+              <div className="section-head">
+                <div>
+                  <div className="eyebrow">{t(lang, { zh: "访问控制", en: "Access control" })}</div>
+                  <div className="detail-title">
+                    {t(lang, {
+                      zh: "Creator 域保持严格按工作区角色收口",
+                      en: "The Creator domain stays scoped by workspace role",
+                    })}
+                  </div>
+                </div>
+                <span className="pill warn">{currentWorkspace.role ?? "viewer"}</span>
+              </div>
+              <div className="detail-body">
+                <div className="detail-item">
+                  <div className="file-name">
+                    {t(lang, { zh: "访问说明", en: "Access note" })}
+                  </div>
+                  <div className="meta">{creatorAccessNote}</div>
+                </div>
+                <div className="detail-item">
+                  <div className="file-name">
+                    {t(lang, { zh: "建议动作", en: "Suggested next step" })}
+                  </div>
+                  <div className="meta">
+                    {t(lang, {
+                      zh: "继续查看工坊与实例；如需发布、治理或调整私有能力，请切换到具备 Creator 权限的工作区。",
+                      en: "Continue in Workshops or Instances. Switch to a workspace with Creator rights before publishing, governance, or private capability changes.",
+                    })}
+                  </div>
+                </div>
+              </div>
+              <div className="panel-inline-actions">
+                <button className="route-btn" type="button" onClick={() => navigate(dashboardRoutes.workshops)}>
+                  {t(lang, { zh: "返回工坊", en: "Open workshops" })}
+                </button>
+                <button className="route-btn active" type="button" onClick={() => navigate(dashboardRoutes.instances)}>
+                  {t(lang, { zh: "查看实例", en: "Open instances" })}
+                </button>
+              </div>
+            </article>
+          </div>
+
+          <div className="creator-rail">
+            <article className="detail-card creator-ops-card">
+              <div className="section-head">
+                <div>
+                  <div className="eyebrow">{t(lang, { zh: "权限矩阵", en: "Permission matrix" })}</div>
+                  <div className="detail-title">
+                    {t(lang, { zh: "当前 Creator 入口状态", en: "Current Creator surface state" })}
+                  </div>
+                </div>
+                <span className="pill">{t(lang, currentWorkspace.type)}</span>
+              </div>
+              <div className="detail-body">
+                <div className="detail-item">
+                  <div className="card-row">
+                    <div className="file-name">{t(lang, { zh: "Package 详情", en: "Package detail" })}</div>
+                    <span className="pill warn">{t(lang, { zh: "关闭", en: "Closed" })}</span>
+                  </div>
+                </div>
+                <div className="detail-item">
+                  <div className="card-row">
+                    <div className="file-name">{t(lang, { zh: "调试回放", en: "Debug replay" })}</div>
+                    <span className="pill warn">{t(lang, { zh: "关闭", en: "Closed" })}</span>
+                  </div>
+                </div>
+                <div className="detail-item">
+                  <div className="card-row">
+                    <div className="file-name">{t(lang, { zh: "治理动作", en: "Governance actions" })}</div>
+                    <span className="pill warn">{t(lang, { zh: "关闭", en: "Closed" })}</span>
+                  </div>
+                </div>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  if (pkg == null) {
+    return (
+      <section className="view" data-testid="dashboard-creator-page">
+        <article className="hero-card">
+          <div className="section-head">
+            <div>
+              <div className="eyebrow">{t(lang, { zh: "Creator 工作台", en: "Creator Studio" })}</div>
+              <h2 className="hero-title">
+                {t(lang, { zh: "当前工作区还没有 Creator 包", en: "No Creator package is available in this workspace yet" })}
+              </h2>
+            </div>
+            <span className="pill active">{t(lang, currentWorkspace.name)}</span>
+          </div>
+          <div className="section-note">
+            {t(lang, {
+              zh: "当前页已经切到真实工作区数据链。未发布 package 时不再回退到样例包，避免把不存在的资产展示成可维护对象。",
+              en: "This page now follows the authoritative workspace data chain. When no package is published, it no longer falls back to sample packages that do not exist in this workspace.",
+            })}
+          </div>
+        </article>
+
+        <div className="creator-layout">
+          <div className="conversation-stack">
+            <article className="filter-card">
+              <div className="section-head">
+                <div>
+                  <div className="eyebrow">{t(lang, { zh: "包筛选", en: "Package filters" })}</div>
+                  <div className="detail-title">{t(lang, { zh: "当前没有可选包", en: "There is no package to select" })}</div>
+                </div>
+                <span className="pill active">00</span>
+              </div>
+              <div className="section-note">
+                {t(lang, {
+                  zh: "先在 Creator 发布链路里创建或激活 package，然后它才会出现在这里。",
+                  en: "Create or activate a package through the Creator release flow before it appears here.",
+                })}
+              </div>
+            </article>
+          </div>
+
+          <div className="detail-stack">
+            <article className="detail-card">
+              <div className="section-head">
+                <div>
+                  <div className="eyebrow">{t(lang, { zh: "当前状态", en: "Current state" })}</div>
+                  <div className="detail-title">{t(lang, { zh: "没有虚构包回填", en: "No fabricated package fallback" })}</div>
+                </div>
+                <span className="pill warn">00</span>
+              </div>
+              <div className="detail-body">
+                <div className="detail-item">
+                  <div className="file-name">{t(lang, { zh: "工作区", en: "Workspace" })}</div>
+                  <div className="meta">{t(lang, currentWorkspace.name)}</div>
+                </div>
+                <div className="detail-item">
+                  <div className="file-name">{t(lang, { zh: "根路径", en: "Root path" })}</div>
+                  <div className="meta">{currentWorkspace.root}</div>
+                </div>
+                <div className="detail-item">
+                  <div className="file-name">{t(lang, { zh: "后续动作", en: "Next step" })}</div>
+                  <div className="meta">
+                    {t(lang, {
+                      zh: "发布一个 Creator 包，或切换到已经有包的工作区。包一旦发布，这里会直接显示真实版本线、绑定关系和治理数据。",
+                      en: "Publish a Creator package or switch to a workspace that already has one. Once a package exists, this surface will show its real version line, bindings, and governance data.",
+                    })}
+                  </div>
+                </div>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   return (
-    <section className="view">
+    <section className="view" data-testid="dashboard-creator-page">
       <article className="hero-card">
         <div className="section-head">
           <div>
@@ -1073,8 +1509,8 @@ export function CreatorPage() {
         <div className="metric-grid">
           {[
             { label: { zh: "session 包", en: "Session packages" }, value: String(visiblePackages.length).padStart(2, "0"), note: { zh: "当前工作区下可维护的 package。", en: "Packages maintainable inside the current workspace." } },
-            { label: { zh: "可发布工坊", en: "Releasable workshops" }, value: String(currentWorkspace.workshopIds.length).padStart(2, "0"), note: { zh: "按工作区和能力策略发布。", en: "Released by workspace and capability policy." } },
-            { label: { zh: "待审计", en: "Pending audit" }, value: "03", note: { zh: "重点看脱敏与凭证注入。", en: "Focused on desensitization and secret injection." } },
+            { label: { zh: "可发布工坊", en: "Releasable workshops" }, value: String(visibleWorkshopCount).padStart(2, "0"), note: { zh: "按工作区和能力策略发布。", en: "Released by workspace and capability policy." } },
+            { label: { zh: "待审计", en: "Pending audit" }, value: String(pendingAuditCount).padStart(2, "0"), note: { zh: "重点看脱敏与凭证注入。", en: "Focused on desensitization and secret injection." } },
           ].map((item) => (
             <div className="metric-card" key={t(lang, item.label)}>
               <div className="metric-label">{t(lang, item.label)}</div>
@@ -1148,9 +1584,7 @@ export function CreatorPage() {
               </div>
             </article>
           ) : null}
-          {filteredPackages.map((item) => {
-            const meta = packageMeta[item.id as keyof typeof packageMeta];
-            return (
+          {filteredPackages.map((item) => (
             <article className={`package-card ${item.id === activePackageId ? "active" : ""}`} key={item.id}>
               <button className="card-hit" type="button" onClick={() => navigate(dashboardRoutes.creatorPackage(item.id))}>
                 <div className="instance-head">
@@ -1159,17 +1593,16 @@ export function CreatorPage() {
                 </div>
                 <div className="meta">{t(lang, item.source)}</div>
                 <div className="meta">
-                  {t(lang, meta.owner)} / {meta.updatedAt}
+                  {t(lang, item.ownerLabel)} / {item.updatedAt}
                 </div>
                 <div className="pill-row">
                   <span className="path-chip active">{item.id}</span>
-                  <span className="path-chip">{meta.serviceIds.length} svc</span>
+                  <span className="path-chip">{item.linkedServiceIds.length} svc</span>
                 </div>
-                <div className="section-note">{t(lang, meta.releaseChannel)}</div>
+                <div className="section-note">{t(lang, item.releaseChannel)}</div>
               </button>
             </article>
-            );
-          })}
+          ))}
         </div>
 
         <div className="detail-stack">
@@ -1201,7 +1634,12 @@ export function CreatorPage() {
               <button className={`route-btn ${isDebugRoute ? "active" : ""}`} type="button" onClick={() => navigate(dashboardRoutes.creatorDebug(pkg.id))}>
                 {t(lang, { zh: "调试回放", en: "Debug replay" })}
               </button>
-              <button className={`route-btn ${isGovernanceRoute ? "active" : ""}`} type="button" onClick={() => navigate(dashboardRoutes.creatorGovernance(governanceSection))}>
+              <button
+                className={`route-btn ${isGovernanceRoute ? "active" : ""}`}
+                type="button"
+                disabled={!creatorAccess.canManageCreatorGovernance}
+                onClick={() => navigate(dashboardRoutes.creatorGovernance(governanceSection))}
+              >
                 {t(lang, { zh: "治理设置", en: "Governance" })}
               </button>
             </div>
@@ -1209,15 +1647,15 @@ export function CreatorPage() {
             <div className="quick-grid">
               <div className="quick-box">
                 <div className="quick-label">{t(lang, { zh: "所有者", en: "Owner" })}</div>
-                <div className="quick-value">{t(lang, currentMeta.owner)}</div>
+                <div className="quick-value">{t(lang, pkg.ownerLabel)}</div>
               </div>
               <div className="quick-box">
                 <div className="quick-label">{t(lang, { zh: "最后回放时间", en: "Last replay" })}</div>
-                <div className="quick-value">{currentMeta.updatedAt}</div>
+                <div className="quick-value">{pkg.updatedAt}</div>
               </div>
               <div className="quick-box">
                 <div className="quick-label">{t(lang, { zh: "发布通道", en: "Release channel" })}</div>
-                <div className="quick-value">{t(lang, currentMeta.releaseChannel)}</div>
+                <div className="quick-value">{t(lang, pkg.releaseChannel)}</div>
               </div>
             </div>
 
@@ -1229,16 +1667,50 @@ export function CreatorPage() {
                       className={`subtab-btn ${governanceSection === item ? "active" : ""}`}
                       key={item}
                       type="button"
+                      disabled={!creatorAccess.canManageCreatorGovernance}
                       onClick={() => navigate(dashboardRoutes.creatorGovernance(item))}
                     >
                       {t(lang, governanceSectionLabel[item])}
                     </button>
                   ))}
                 </div>
-                <CreatorGovernancePanel section={governanceSection} />
+                {creatorAccess.canManageCreatorGovernance ? (
+                  <CreatorGovernancePanel
+                    packageId={pkg.id}
+                    section={governanceSection}
+                    meta={governanceMeta[governanceSection]}
+                    workspaceLabel={currentWorkspace.name}
+                    workspaceRuntimeId={currentWorkspace.runtimeWorkspaceId}
+                    workspaceContextKey={currentWorkspace.contextKey}
+                    linkedServiceIds={pkg.linkedServiceIds}
+                  />
+                ) : (
+                  <div className="detail-body">
+                    <div className="detail-item">
+                      <div className="file-name">{t(lang, { zh: "治理访问受限", en: "Governance access restricted" })}</div>
+                      <div className="meta">{governanceAccessNote}</div>
+                    </div>
+                    <div className="panel-inline-actions">
+                      <button
+                        className="route-btn"
+                        type="button"
+                        onClick={() => navigate(dashboardRoutes.creatorPackage(pkg.id))}
+                      >
+                        {t(lang, { zh: "返回包详情", en: "Back to package detail" })}
+                      </button>
+                      <button
+                        className="route-btn active"
+                        type="button"
+                        onClick={() => navigate(dashboardRoutes.creatorDebug(pkg.id))}
+                      >
+                        {t(lang, { zh: "打开回放", en: "Open replay" })}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </>
             ) : isDebugRoute ? (
-              <CreatorDebugPanel />
+              <CreatorDebugPanel packageId={pkg.id} />
             ) : (
               <>
                 <div className="detail-body">
@@ -1262,7 +1734,7 @@ export function CreatorPage() {
                   </div>
                   <div className="detail-item">
                     <div className="file-name">{t(lang, { zh: "版本线", en: "Version line" })}</div>
-                    {currentMeta.versionLine.map((item) => (
+                    {pkg.versionLine.map((item) => (
                       <div className="route-code" key={item}>
                         {item}
                       </div>
@@ -1270,7 +1742,7 @@ export function CreatorPage() {
                   </div>
                   <div className="detail-item">
                     <div className="file-name">{t(lang, { zh: "依赖摘要", en: "Dependency summary" })}</div>
-                    {currentMeta.dependencies.map((item) => (
+                    {pkg.dependencies.map((item) => (
                       <div className="meta" key={t(lang, item)}>
                         {t(lang, item)}
                       </div>
@@ -1289,16 +1761,23 @@ export function CreatorPage() {
                     </button>
                   ))}
                 </div>
-                <CreatorTabPanel />
+                <CreatorTabPanel
+                  pkg={pkg}
+                  availableWorkspaceContextKeys={pkg.workspaceContextKeys}
+                  defaultWorkspaceContextKey={currentWorkspace.id}
+                />
               </>
             )}
           </article>
         </div>
 
         <CreatorOperationsRail
+          boundWorkspaces={boundWorkspaces}
+          canManageGovernance={creatorAccess.canManageCreatorGovernance}
           governanceSection={governanceSection}
           isGovernanceRoute={isGovernanceRoute}
-          packageId={pkg.id}
+          pkg={pkg}
+          queriesEnabled={dataQueriesEnabled}
           relatedServices={relatedServices}
           relatedWorkshops={relatedWorkshops}
         />

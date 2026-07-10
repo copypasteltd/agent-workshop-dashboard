@@ -1,9 +1,10 @@
 import { createRunsRealtimeClient, type RunRealtimeConnection } from "@lingban/api-sdk";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { serverRealtimeMessageSchema, type RunSnapshot } from "@lingban/contracts";
+import { type RunSnapshot, type SendRunMessageInput } from "@lingban/contracts";
 import { applyBridgeEventToRunSnapshot } from "@lingban/domain-models";
 import { dashboardApiBaseUrl } from "./api";
+import { useDashboardAuthStore } from "../stores/dashboardAuthStore";
 
 function upsertRunSnapshot(list: RunSnapshot[] | undefined, snapshot: RunSnapshot) {
   const current = list ?? [];
@@ -18,12 +19,13 @@ function upsertRunSnapshot(list: RunSnapshot[] | undefined, snapshot: RunSnapsho
 
 const dashboardRunsRealtime = createRunsRealtimeClient({
   baseUrl: dashboardApiBaseUrl,
+  getAccessToken: () => useDashboardAuthStore.getState().tokens?.accessToken,
 });
 
 type DashboardRunStreamState = {
   connected: boolean;
   transport: "idle" | "ws" | "sse";
-  sendMessage(text: string): boolean;
+  sendMessage(input: SendRunMessageInput): boolean;
 };
 
 export function useDashboardRunStream(runId: string | null, enabled = true) {
@@ -50,74 +52,36 @@ export function useDashboardRunStream(runId: string | null, enabled = true) {
       queryClient.setQueryData(["dashboard", "runs", runId, "files"], snapshot.files);
     };
 
-    const handleRealtimePayload = (raw: MessageEvent<string>) => {
-      const parsed = serverRealtimeMessageSchema.parse(JSON.parse(raw.data) as unknown);
-
-      if (parsed.type === "runs.snapshot") {
-        syncSnapshot(parsed.payload);
-        return;
-      }
-
-      if (parsed.type !== "runs.event") {
-        return;
-      }
-
-      const current = queryClient.getQueryData<RunSnapshot>(["dashboard", "runs", runId]);
-      if (!current) {
-        return;
-      }
-
-      const next = applyBridgeEventToRunSnapshot(current, parsed.payload);
-      syncSnapshot(next);
-    };
-
-    if (typeof WebSocket !== "undefined") {
-      const connection = dashboardRunsRealtime.connect(runId, {
-        onOpen: () => {
-          setConnected(true);
-          setTransport("ws");
-        },
-        onClose: () => {
-          setConnected(false);
-        },
-        onSnapshot: syncSnapshot,
-        onEvent: (event) => {
-          const current = queryClient.getQueryData<RunSnapshot>(["dashboard", "runs", runId]);
-          if (!current) {
-            return;
-          }
-
-          const next = applyBridgeEventToRunSnapshot(current, event);
-          syncSnapshot(next);
-        },
-      });
-
-      connectionRef.current = connection;
-
-      return () => {
-        connection.close();
-        if (connectionRef.current === connection) {
-          connectionRef.current = null;
-        }
+    const connection = dashboardRunsRealtime.connect(runId, {
+      onOpen: () => {
+        setConnected(true);
+      },
+      onClose: () => {
         setConnected(false);
         setTransport("idle");
-      };
-    }
+      },
+      onTransport: (nextTransport) => {
+        setTransport(nextTransport);
+      },
+      onSnapshot: syncSnapshot,
+      onEvent: (event) => {
+        const current = queryClient.getQueryData<RunSnapshot>(["dashboard", "runs", runId]);
+        if (!current) {
+          return;
+        }
 
-    if (typeof EventSource === "undefined") {
-      return;
-    }
+        const next = applyBridgeEventToRunSnapshot(current, event);
+        syncSnapshot(next);
+      },
+    });
 
-    setConnected(true);
-    setTransport("sse");
-
-    const source = new EventSource(`${dashboardApiBaseUrl}/v1/runs/${runId}/stream`);
-
-    source.addEventListener("runs.snapshot", handleRealtimePayload as EventListener);
-    source.addEventListener("runs.event", handleRealtimePayload as EventListener);
+    connectionRef.current = connection;
 
     return () => {
-      source.close();
+      connection.close();
+      if (connectionRef.current === connection) {
+        connectionRef.current = null;
+      }
       setConnected(false);
       setTransport("idle");
     };
@@ -126,15 +90,12 @@ export function useDashboardRunStream(runId: string | null, enabled = true) {
   return {
     connected,
     transport,
-    sendMessage(text: string) {
+    sendMessage(input: SendRunMessageInput) {
       if (!connectionRef.current?.isOpen()) {
         return false;
       }
 
-      connectionRef.current.sendMessage({
-        text,
-        attachments: [],
-      });
+      connectionRef.current.sendMessage(input);
       return true;
     },
   } satisfies DashboardRunStreamState;

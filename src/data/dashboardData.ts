@@ -36,6 +36,8 @@ export type InstanceRecord = {
   workspace: LocalizedString;
   status: LocalizedString;
   statusClass: string;
+  tags?: string[];
+  attentionMode?: "todo" | "running" | "done";
   targetPath: string;
   route: string;
   summary: LocalizedString;
@@ -46,6 +48,7 @@ export type InstanceRecord = {
     title: LocalizedString | string;
     time: string;
     body: LocalizedString;
+    attachments?: Array<{ label: string; path: string }>;
   }>;
   overview: {
     cards: Array<{ label: LocalizedString; value: LocalizedString }>;

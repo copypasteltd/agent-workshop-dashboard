@@ -12,6 +12,7 @@ export function IconSprite() {
       <symbol id="i-panel-left" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4V20" /><path d="M14 9L10 12L14 15" /></symbol>
       <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 16V11C6 7.69 8.69 5 12 5C15.31 5 18 7.69 18 11V16L20 18H4L6 16Z" /><path d="M10 20C10.53 20.61 11.24 21 12 21C12.76 21 13.47 20.61 14 20" /></symbol>
       <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4" /><path d="M5 19C6.75 16.67 9.17 15.5 12 15.5C14.83 15.5 17.25 16.67 19 19" /></symbol>
+      <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 21L4.9 13.9A5 5 0 0 1 12 6.8L12 7.8L13 6.8A5 5 0 0 1 20.1 13.9L12 21Z" /></symbol>
       <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="M6 9L12 15L18 9" /></symbol>
       <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6L18 18" /><path d="M18 6L6 18" /></symbol>
     </svg>

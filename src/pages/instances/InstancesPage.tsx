@@ -1,14 +1,29 @@
+import { uploadRunAttachment } from "@lingban/api-sdk";
 import { matchesSearchQuery } from "@lingban/domain-models";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import type { InstanceRecord, InstanceTab } from "../../data/dashboardData";
-import { dashboardServices, dashboardWorkspaces, instances } from "../../data/dashboardData";
-import { buildDashboardRunFileDownloadUrl, dashboardRunsApi } from "../../lib/api";
+import { dashboardServices, instances } from "../../data/dashboardData";
+import { formatAttachmentSize, pickBrowserAttachments, type BrowserAttachmentDraft } from "../../lib/attachments";
+import {
+  billingSourceLabel,
+  billingSourceTone,
+  formatBillingQuantity,
+  formatBillingUsd,
+} from "../../lib/billing";
+import {
+  dashboardBillingApi,
+  dashboardRunsApi,
+  requestDashboardRunFileDownloadUrl,
+} from "../../lib/api";
 import { t } from "../../lib/i18n";
+import { useDashboardRecentRecorder } from "../../lib/recent";
 import { isLiveRunId, mapRunSnapshotToInstanceRecord } from "../../lib/liveRunAdapters";
 import { dashboardRoutes, isInstanceTab } from "../../lib/routes";
 import { useDashboardRunStream } from "../../lib/runStream";
+import { resolveDashboardWorkspaceView } from "../../lib/workspaceContext";
+import { useDashboardAuthStore } from "../../stores/dashboardAuthStore";
 import { useDashboardUiStore } from "../../stores/dashboardUiStore";
 
 const instanceTabs: Array<{ key: InstanceTab; label: { zh: string; en: string } }> = [
@@ -19,6 +34,34 @@ const instanceTabs: Array<{ key: InstanceTab; label: { zh: string; en: string } 
 ];
 
 type InstanceListMode = "all" | "todo" | "running" | "done";
+
+function toListAttentionModeFilter(listMode: InstanceListMode) {
+  switch (listMode) {
+    case "todo":
+      return "todo" as const;
+    case "running":
+      return "running" as const;
+    case "done":
+      return "done" as const;
+    case "all":
+    default:
+      return undefined;
+  }
+}
+
+function toListViewStatusFilter(statusFilter: "all" | "active" | "warn" | "success") {
+  switch (statusFilter) {
+    case "active":
+      return "running" as const;
+    case "warn":
+      return "approval" as const;
+    case "success":
+      return "done" as const;
+    case "all":
+    default:
+      return undefined;
+  }
+}
 
 function inferInstanceService(instance: InstanceRecord) {
   return (
@@ -47,7 +90,105 @@ function getUnreadCount(instance: InstanceRecord) {
   return count;
 }
 
+function formatBillingOccurredAt(lang: "zh" | "en", value: string | null) {
+  if (!value) {
+    return t(lang, { zh: "尚无记录", en: "No activity yet" });
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleString(lang === "zh" ? "zh-CN" : "en-US", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+function mcpCallStatusLabel(lang: "zh" | "en", value: string) {
+  switch (value) {
+    case "success":
+      return t(lang, { zh: "成功", en: "Success" });
+    case "error":
+      return t(lang, { zh: "错误", en: "Error" });
+    case "cancelled":
+      return t(lang, { zh: "已取消", en: "Cancelled" });
+    case "rejected":
+      return t(lang, { zh: "已拦截", en: "Rejected" });
+    default:
+      return value;
+  }
+}
+
+function mcpCallStatusTone(value: string) {
+  switch (value) {
+    case "success":
+      return "success";
+    case "error":
+    case "rejected":
+      return "warn";
+    case "cancelled":
+      return "";
+    default:
+      return "";
+  }
+}
+
+function mcpRiskLabel(lang: "zh" | "en", value: string) {
+  switch (value) {
+    case "low":
+      return t(lang, { zh: "低风险", en: "Low risk" });
+    case "medium":
+      return t(lang, { zh: "中风险", en: "Medium risk" });
+    case "high":
+      return t(lang, { zh: "高风险", en: "High risk" });
+    case "critical":
+      return t(lang, { zh: "关键风险", en: "Critical risk" });
+    default:
+      return value;
+  }
+}
+
+function mcpRiskTone(value: string) {
+  switch (value) {
+    case "low":
+      return "success";
+    case "medium":
+      return "active";
+    case "high":
+    case "critical":
+      return "warn";
+    default:
+      return "";
+  }
+}
+
+function formatDataVolume(value: number | null) {
+  if (value === null || value <= 0) {
+    return "--";
+  }
+
+  if (value >= 1024 * 1024) {
+    return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  if (value >= 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+
+  return `${value} B`;
+}
+
 function getInstanceTags(instance: InstanceRecord) {
+  const explicitTags = (instance as InstanceRecord & { tags?: string[] }).tags;
+  if (explicitTags && explicitTags.length > 0) {
+    return explicitTags;
+  }
+
   const tags = new Set<string>();
   tags.add(instance.workspaceId === "personal" ? "#personal" : "#enterprise");
 
@@ -75,6 +216,16 @@ function getInstanceTags(instance: InstanceRecord) {
 }
 
 function getInstanceAttention(instance: InstanceRecord) {
+  const attentionMode = (instance as InstanceRecord & { attentionMode?: "todo" | "running" | "done" })
+    .attentionMode;
+  if (attentionMode) {
+    return {
+      needsApproval: attentionMode === "todo",
+      resultReady: attentionMode === "done",
+      unreadCount: getUnreadCount(instance),
+    };
+  }
+
   return {
     needsApproval: instance.statusClass === "warn" || instance.statusClass === "danger",
     resultReady:
@@ -133,6 +284,7 @@ function InstanceTabPanel({ instance, liveMode }: { instance: InstanceRecord; li
   );
   const [pathError, setPathError] = useState("");
   const [fileSearch, setFileSearch] = useState("");
+  const [downloadingPath, setDownloadingPath] = useState("");
 
   useEffect(() => {
     setSelectedFilePath(instance.files.items[0]?.path ?? null);
@@ -141,6 +293,7 @@ function InstanceTabPanel({ instance, liveMode }: { instance: InstanceRecord; li
     setPathInput(nextPath);
     setPathError("");
     setFileSearch("");
+    setDownloadingPath("");
   }, [instance.files.currentPath, instance.files.items, instance.id, instance.targetPath]);
 
   const rootPath = normalizeDirectoryPath(instance.targetPath);
@@ -202,19 +355,73 @@ function InstanceTabPanel({ instance, liveMode }: { instance: InstanceRecord; li
 
   const filePreviewQuery = useQuery({
     enabled: liveMode && instanceTab === "files" && Boolean(selectedFile?.path),
-    queryKey: ["dashboard", "runs", instance.id, "files", "read", selectedFile?.path ?? ""],
+    queryKey: ["dashboard", "runs", instance.id, "files", "preview", selectedFile?.path ?? ""],
     queryFn: async () => {
       if (!selectedFile?.path) {
         return null;
       }
 
       try {
-        return await dashboardRunsApi.readRunFile(instance.id, selectedFile.path);
+        return await dashboardRunsApi.previewRunFile(instance.id, selectedFile.path);
       } catch {
         return null;
       }
     },
   });
+
+  const billingSummaryQuery = useQuery({
+    enabled: liveMode && instanceTab === "overview",
+    queryKey: ["dashboard", "billing", "summary", "run", instance.id],
+    queryFn: async () => {
+      try {
+        return await dashboardBillingApi.getSummary({ runId: instance.id });
+      } catch {
+        return null;
+      }
+    },
+    refetchInterval: 10_000,
+    retry: false,
+  });
+
+  const billingEntriesQuery = useQuery({
+    enabled: liveMode && instanceTab === "overview",
+    queryKey: ["dashboard", "billing", "entries", "run", instance.id],
+    queryFn: async () => {
+      try {
+        return await dashboardBillingApi.listEntries({ runId: instance.id, limit: 6 });
+      } catch {
+        return [];
+      }
+    },
+    refetchInterval: 10_000,
+    retry: false,
+  });
+
+  const mcpCallsQuery = useQuery({
+    enabled: liveMode && instanceTab === "audit",
+    queryKey: ["dashboard", "runs", instance.id, "mcp-calls"],
+    queryFn: async () => {
+      try {
+        return await dashboardRunsApi.listRunMcpCalls(instance.id, { limit: 8 });
+      } catch {
+        return [];
+      }
+    },
+    refetchInterval: 10_000,
+    retry: false,
+  });
+
+  const topBillingMetric =
+    [...(billingSummaryQuery.data?.metrics ?? [])].sort((left, right) => right.amountUsd - left.amountUsd)[0] ?? null;
+  const recentBillingEntries = [...(billingEntriesQuery.data ?? [])]
+    .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))
+    .slice(0, 4);
+  const recentMcpCalls = [...(mcpCallsQuery.data ?? [])]
+    .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))
+    .slice(0, 6);
+  const latestMcpCall = recentMcpCalls[0] ?? null;
+  const distinctMcpCount = new Set(recentMcpCalls.map((item) => item.mcpId)).size;
+  const mcpIssueCount = recentMcpCalls.filter((item) => item.status !== "success").length;
 
   if (instanceTab === "files") {
     return (
@@ -358,46 +565,88 @@ function InstanceTabPanel({ instance, liveMode }: { instance: InstanceRecord; li
                   <button
                     className="route-btn active"
                     type="button"
-                    onClick={() => {
-                      window.open(
-                        buildDashboardRunFileDownloadUrl(instance.id, selectedFile.path),
-                        "_blank",
-                        "noopener,noreferrer"
-                      );
+                    disabled={downloadingPath === selectedFile.path}
+                    onClick={async () => {
+                      try {
+                        setDownloadingPath(selectedFile.path);
+                        const url =
+                          filePreviewQuery.data?.downloadUrl ??
+                          (await requestDashboardRunFileDownloadUrl(instance.id, selectedFile.path));
+                        window.open(url, "_blank", "noopener,noreferrer");
+                      } finally {
+                        setDownloadingPath("");
+                      }
                     }}
                   >
-                    {t(lang, { zh: "下载文件", en: "Download" })}
+                    {downloadingPath === selectedFile.path
+                      ? t(lang, { zh: "准备下载中", en: "Preparing download" })
+                      : t(lang, { zh: "下载文件", en: "Download" })}
                   </button>
                 ) : null}
               </div>
             </div>
             <div className="meta preview-meta">{selectedFile.path}</div>
             <div className="meta">{t(lang, selectedFile.note)}</div>
-            <pre className="preview-code">
-              {liveMode
-                ? filePreviewQuery.isPending
-                  ? t(lang, { zh: "正在读取文件内容...", en: "Reading file content..." })
-                  : filePreviewQuery.data
-                    ? `${filePreviewQuery.data.content}${
-                        filePreviewQuery.data.truncated
-                          ? `\n\n${t(lang, {
-                              zh: "[内容过长，已截断。请下载完整文件。]",
-                              en: "[The preview is truncated. Download the full file.]",
-                            })}`
-                          : ""
-                      }`
-                    : t(lang, {
-                        zh: "当前文件更适合直接下载查看，或者后端尚未返回可预览文本。",
-                        en: "This file is better inspected through download, or the backend did not return a text preview.",
-                      })
-                : t(
-                    lang,
-                    selectedFile.preview ?? {
-                      zh: "当前为静态参照数据。正式接入 live run 后会在这里展示真实文本预览。",
-                      en: "This is static reference data. Live runs will show real text previews here.",
-                    }
-                  )}
-            </pre>
+            {liveMode ? (
+              filePreviewQuery.isPending ? (
+                <pre className="preview-code">
+                  {t(lang, { zh: "正在读取文件内容...", en: "Reading file content..." })}
+                </pre>
+              ) : filePreviewQuery.data ? (
+                filePreviewQuery.data.mode === "text" ? (
+                  <pre className="preview-code">
+                    {`${filePreviewQuery.data.content ?? ""}${
+                      filePreviewQuery.data.truncated
+                        ? `\n\n${t(lang, {
+                            zh: "[内容过长，已截断。请下载完整文件。]",
+                            en: "[The preview is truncated. Download the full file.]",
+                          })}`
+                        : ""
+                    }`}
+                  </pre>
+                ) : filePreviewQuery.data.mode === "image" && filePreviewQuery.data.downloadUrl ? (
+                  <div className="preview-media-shell">
+                    <img
+                      className="preview-media"
+                      src={filePreviewQuery.data.downloadUrl}
+                      alt={selectedFile.name}
+                    />
+                  </div>
+                ) : filePreviewQuery.data.mode === "pdf" && filePreviewQuery.data.downloadUrl ? (
+                  <div className="preview-embed-shell">
+                    <iframe
+                      className="preview-embed"
+                      src={filePreviewQuery.data.downloadUrl}
+                      title={selectedFile.name}
+                    />
+                  </div>
+                ) : (
+                  <pre className="preview-code">
+                    {t(lang, {
+                      zh: "当前文件更适合直接下载查看，或者后端尚未返回可预览内容。",
+                      en: "This file is better inspected through download, or the backend did not return an inline preview.",
+                    })}
+                  </pre>
+                )
+              ) : (
+                <pre className="preview-code">
+                  {t(lang, {
+                    zh: "当前文件更适合直接下载查看，或者后端尚未返回可预览内容。",
+                    en: "This file is better inspected through download, or the backend did not return an inline preview.",
+                  })}
+                </pre>
+              )
+            ) : (
+              <pre className="preview-code">
+                {t(
+                  lang,
+                  selectedFile.preview ?? {
+                    zh: "当前为静态参照数据。正式接入 live run 后会在这里展示真实文本预览。",
+                    en: "This is static reference data. Live runs will show real text previews here.",
+                  }
+                )}
+              </pre>
+            )}
           </div>
         ) : null}
       </div>
@@ -440,10 +689,130 @@ function InstanceTabPanel({ instance, liveMode }: { instance: InstanceRecord; li
         <div className="section-head">
           <div>
             <div className="eyebrow">{t(lang, { zh: "审计", en: "Audit" })}</div>
-            <div className="tab-title">{t(lang, { zh: "时间线与边界", en: "Timeline and boundaries" })}</div>
+            <div className="tab-title">{t(lang, { zh: "调用时间线与运行边界", en: "Call timeline and runtime boundaries" })}</div>
           </div>
-          <span className="pill warn">{t(lang, { zh: "按需查看", en: "On demand" })}</span>
+          <span className={`pill ${recentMcpCalls.length > 0 ? "active" : "warn"}`}>
+            {recentMcpCalls.length > 0
+              ? t(lang, { zh: `${recentMcpCalls.length} 条 MCP 记录`, en: `${recentMcpCalls.length} MCP records` })
+              : t(lang, { zh: "按需查看", en: "On demand" })}
+          </span>
         </div>
+        {liveMode ? (
+          <div className="governance-stack">
+            <article className="detail-item governance-card">
+              <div className="card-row">
+                <div>
+                  <div className="file-name">{t(lang, { zh: "最近 MCP 调用", en: "Recent MCP activity" })}</div>
+                  <div className="meta">
+                    {t(lang, {
+                      zh: "这里展示当前实例内真实发生的 connector/tool 调用、风险等级和审计状态。",
+                      en: "This shows the real connector/tool calls, risk levels, and audit states recorded for the active run.",
+                    })}
+                  </div>
+                </div>
+                <span className={`pill ${mcpIssueCount > 0 ? "warn" : recentMcpCalls.length > 0 ? "success" : ""}`}>
+                  {mcpCallsQuery.isFetching
+                    ? t(lang, { zh: "同步中", en: "Syncing" })
+                    : t(lang, { zh: `${recentMcpCalls.length} 条`, en: `${recentMcpCalls.length} items` })}
+                </span>
+              </div>
+
+              {mcpCallsQuery.isPending && recentMcpCalls.length === 0 ? (
+                <div className="panel-empty">
+                  {t(lang, {
+                    zh: "正在同步 MCP 审计记录。",
+                    en: "Syncing MCP audit records.",
+                  })}
+                </div>
+              ) : recentMcpCalls.length === 0 ? (
+                <div className="panel-empty">
+                  {t(lang, {
+                    zh: "当前实例还没有记录到 MCP 调用。",
+                    en: "No MCP call has been recorded for this run yet.",
+                  })}
+                </div>
+              ) : (
+                <>
+                  <div className="quick-grid">
+                    <div className="quick-box">
+                      <div className="quick-label">{t(lang, { zh: "调用数", en: "Calls" })}</div>
+                      <div className="quick-value">{String(recentMcpCalls.length)}</div>
+                      <div className="tiny-note">
+                        {t(lang, {
+                          zh: "当前审计窗口内已采集的调用条目数。",
+                          en: "Calls collected inside the current audit window.",
+                        })}
+                      </div>
+                    </div>
+                    <div className="quick-box">
+                      <div className="quick-label">{t(lang, { zh: "连接器", en: "Connectors" })}</div>
+                      <div className="quick-value">{String(distinctMcpCount)}</div>
+                      <div className="tiny-note">
+                        {latestMcpCall ? latestMcpCall.displayName : t(lang, { zh: "暂无", en: "None yet" })}
+                      </div>
+                    </div>
+                    <div className="quick-box">
+                      <div className="quick-label">{t(lang, { zh: "最近发生", en: "Latest" })}</div>
+                      <div className="quick-value">{formatBillingOccurredAt(lang, latestMcpCall?.occurredAt ?? null)}</div>
+                      <div className="tiny-note">
+                        {latestMcpCall
+                          ? `${latestMcpCall.toolName} / ${mcpCallStatusLabel(lang, latestMcpCall.status)}`
+                          : t(lang, { zh: "尚无记录", en: "No activity yet" })}
+                      </div>
+                    </div>
+                    <div className="quick-box">
+                      <div className="quick-label">{t(lang, { zh: "异常/拦截", en: "Issues" })}</div>
+                      <div className="quick-value">{String(mcpIssueCount)}</div>
+                      <div className="tiny-note">
+                        {t(lang, {
+                          zh: "错误、取消和被策略拦截的调用会计入这里。",
+                          en: "Errors, cancellations, and rejected calls are counted here.",
+                        })}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="governance-stack">
+                    {recentMcpCalls.map((call) => (
+                      <article className="detail-item governance-card" key={call.callId}>
+                        <div className="card-row">
+                          <div>
+                            <div className="file-name">{`${call.displayName} / ${call.toolName}`}</div>
+                            <div className="meta">{call.callId}</div>
+                          </div>
+                          <div className="pill-row">
+                            <span className={`pill ${mcpRiskTone(call.riskLevel)}`}>{mcpRiskLabel(lang, call.riskLevel)}</span>
+                            <span className={`pill ${mcpCallStatusTone(call.status)}`}>{mcpCallStatusLabel(lang, call.status)}</span>
+                          </div>
+                        </div>
+                        <div className="governance-form-grid">
+                          <div className="fake-input governance-field">
+                            <span className="tiny-note">{t(lang, { zh: "连接方式", en: "Transport" })}</span>
+                            <div className="meta">{`${call.source} / ${call.transport}`}</div>
+                          </div>
+                          <div className="fake-input governance-field">
+                            <span className="tiny-note">{t(lang, { zh: "耗时", en: "Duration" })}</span>
+                            <div className="meta">{call.durationMs !== null ? `${call.durationMs} ms` : "--"}</div>
+                          </div>
+                          <div className="fake-input governance-field">
+                            <span className="tiny-note">{t(lang, { zh: "输入/输出", en: "Input / Output" })}</span>
+                            <div className="meta">{`${formatDataVolume(call.inputBytes)} / ${formatDataVolume(call.outputBytes)}`}</div>
+                          </div>
+                          <div className="fake-input governance-field">
+                            <span className="tiny-note">{t(lang, { zh: "发生时间", en: "Occurred at" })}</span>
+                            <div className="meta">{formatBillingOccurredAt(lang, call.occurredAt)}</div>
+                          </div>
+                        </div>
+                        {call.inputSummary ? <div className="meta">{call.inputSummary}</div> : null}
+                        {call.errorMessage ? <div className="meta">{call.errorMessage}</div> : null}
+                      </article>
+                    ))}
+                  </div>
+                </>
+              )}
+            </article>
+          </div>
+        ) : null}
         {instance.audit.timeline.map((item) => (
           <div className="audit-row" key={`${item.time}-${t(lang, item.text)}`}>
             <div className="file-name">{item.time}</div>
@@ -474,6 +843,122 @@ function InstanceTabPanel({ instance, liveMode }: { instance: InstanceRecord; li
         </div>
         <span className={`pill ${instance.statusClass}`}>{t(lang, instance.status)}</span>
       </div>
+      {liveMode ? (
+        <>
+          <div className="quick-grid">
+            <div className="quick-box">
+              <div className="quick-label">{t(lang, { zh: "已计量金额", en: "Metered amount" })}</div>
+              <div className="quick-value">
+                {formatBillingUsd(billingSummaryQuery.data?.totalAmountUsd ?? 0)}
+              </div>
+              <div className="tiny-note">
+                {t(lang, {
+                  zh: "当前实例累计的账单金额。",
+                  en: "Cumulative metered amount for this run.",
+                })}
+              </div>
+            </div>
+            <div className="quick-box">
+              <div className="quick-label">{t(lang, { zh: "计量事件", en: "Billing events" })}</div>
+              <div className="quick-value">{String(billingSummaryQuery.data?.totalEntriesCount ?? 0)}</div>
+              <div className="tiny-note">
+                {t(lang, {
+                  zh: "消息、上传、文件访问和运行时长都会计入。",
+                  en: "Messages, uploads, file access, and runtime all contribute.",
+                })}
+              </div>
+            </div>
+            <div className="quick-box">
+              <div className="quick-label">{t(lang, { zh: "最高成本项", en: "Top metric" })}</div>
+              <div className="quick-value">
+                {topBillingMetric ? t(lang, topBillingMetric.label) : "--"}
+              </div>
+              <div className="tiny-note">
+                {topBillingMetric
+                  ? `${formatBillingQuantity(topBillingMetric.quantity)} / ${formatBillingUsd(topBillingMetric.amountUsd)}`
+                  : t(lang, { zh: "尚未产生计量。", en: "No billing yet." })}
+              </div>
+            </div>
+            <div className="quick-box">
+              <div className="quick-label">{t(lang, { zh: "最近计量", en: "Latest metering" })}</div>
+              <div className="quick-value">
+                {formatBillingOccurredAt(lang, billingSummaryQuery.data?.updatedAt ?? null)}
+              </div>
+              <div className="tiny-note">
+                {billingSummaryQuery.isFetching
+                  ? t(lang, { zh: "正在同步账单状态。", en: "Syncing billing state." })
+                  : t(lang, {
+                      zh: "每次新的运行行为都会刷新这里。",
+                      en: "This refreshes whenever the run produces new billable activity.",
+                    })}
+              </div>
+            </div>
+          </div>
+
+          <div className="governance-stack">
+            <article className="detail-item governance-card">
+              <div className="card-row">
+                <div>
+                  <div className="file-name">{t(lang, { zh: "最近计量事件", en: "Recent metering events" })}</div>
+                  <div className="meta">
+                    {t(lang, {
+                      zh: "用于复核当前实例哪些行为正在消耗额度和成本。",
+                      en: "Review which run actions are currently consuming quota and cost.",
+                    })}
+                  </div>
+                </div>
+                <span className={`pill ${recentBillingEntries.length > 0 ? "active" : ""}`}>
+                  {billingSummaryQuery.isFetching ? t(lang, { zh: "同步中", en: "Syncing" }) : recentBillingEntries.length}
+                </span>
+              </div>
+
+              {recentBillingEntries.length === 0 ? (
+                <div className="panel-empty">
+                  {t(lang, {
+                    zh: "当前实例还没有产生可展示的计量记录。",
+                    en: "No billable activity has been recorded for this run yet.",
+                  })}
+                </div>
+              ) : (
+                <div className="governance-stack">
+                  {recentBillingEntries.map((entry) => (
+                    <article className="detail-item governance-card" key={entry.entryId}>
+                      <div className="card-row">
+                        <div>
+                          <div className="file-name">{t(lang, billingSourceLabel(entry.source))}</div>
+                          <div className="meta">{entry.entryId}</div>
+                        </div>
+                        <span className={`pill ${billingSourceTone(entry.source)}`}>
+                          {formatBillingUsd(entry.amountUsd)}
+                        </span>
+                      </div>
+                      <div className="governance-form-grid">
+                        <div className="fake-input governance-field">
+                          <span className="tiny-note">{t(lang, { zh: "指标", en: "Metric" })}</span>
+                          <div className="meta">{entry.metric}</div>
+                        </div>
+                        <div className="fake-input governance-field">
+                          <span className="tiny-note">{t(lang, { zh: "数量", en: "Quantity" })}</span>
+                          <div className="meta">{formatBillingQuantity(entry.quantity)}</div>
+                        </div>
+                        <div className="fake-input governance-field">
+                          <span className="tiny-note">{t(lang, { zh: "单价", en: "Unit price" })}</span>
+                          <div className="meta">{formatBillingUsd(entry.unitPriceUsd)}</div>
+                        </div>
+                        <div className="fake-input governance-field">
+                          <span className="tiny-note">{t(lang, { zh: "发生时间", en: "Occurred at" })}</span>
+                          <div className="meta">{formatBillingOccurredAt(lang, entry.occurredAt)}</div>
+                        </div>
+                      </div>
+                      {entry.note ? <div className="meta">{entry.note}</div> : null}
+                    </article>
+                  ))}
+                </div>
+              )}
+            </article>
+          </div>
+        </>
+      ) : null}
       {instance.overview.cards.map((card) => (
         <div className="detail-item" key={t(lang, card.label)}>
           <div className="file-name">{t(lang, card.label)}</div>
@@ -490,6 +975,9 @@ export function InstancesPage() {
   const { instanceId, detailTab } = useParams();
   const lang = useDashboardUiStore((state) => state.lang);
   const currentWorkspaceId = useDashboardUiStore((state) => state.currentWorkspaceId);
+  const authMode = useDashboardAuthStore((state) => state.authMode);
+  const authWorkspaces = useDashboardAuthStore((state) => state.workspaces);
+  const authCurrentWorkspace = useDashboardAuthStore((state) => state.currentWorkspace);
   const activeInstanceId = useDashboardUiStore((state) => state.activeInstanceId);
   const setActiveInstanceId = useDashboardUiStore((state) => state.setActiveInstanceId);
   const instanceTab = useDashboardUiStore((state) => state.instanceTab);
@@ -501,8 +989,15 @@ export function InstancesPage() {
   const [listMode, setListMode] = useState<InstanceListMode>("all");
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "warn" | "success">("all");
   const [tagFilter, setTagFilter] = useState("all");
-  const currentWorkspace =
-    dashboardWorkspaces.find((item) => item.id === currentWorkspaceId) ?? dashboardWorkspaces[0];
+  const currentWorkspace = useMemo(
+    () =>
+      resolveDashboardWorkspaceView({
+        selectionId: currentWorkspaceId,
+        workspaces: authMode === "required" ? authWorkspaces : undefined,
+        fallbackWorkspaceId: authCurrentWorkspace?.workspaceId,
+      }),
+    [authCurrentWorkspace?.workspaceId, authMode, authWorkspaces, currentWorkspaceId]
+  );
 
   const runsQuery = useQuery({
     queryKey: ["dashboard", "runs"],
@@ -514,6 +1009,47 @@ export function InstancesPage() {
       }
     },
     refetchInterval: 10_000,
+  });
+
+  const filteredRunsQuery = useQuery({
+    queryKey: [
+      "dashboard",
+      "runs",
+      "filtered",
+      currentWorkspace.selectionId,
+      currentWorkspace.id,
+      listMode,
+      statusFilter,
+      tagFilter,
+      searchQuery,
+    ],
+    queryFn: async () => {
+      try {
+        return await dashboardRunsApi.listRuns({
+          q: searchQuery.trim() || undefined,
+          attentionMode: toListAttentionModeFilter(listMode),
+          viewStatus: toListViewStatusFilter(statusFilter),
+          tag: tagFilter === "all" ? undefined : tagFilter,
+        });
+      } catch {
+        return [];
+      }
+    },
+    refetchInterval: 10_000,
+    retry: false,
+  });
+
+  const runsSummaryQuery = useQuery({
+    queryKey: ["dashboard", "runs", "summary", currentWorkspace.selectionId, currentWorkspace.id],
+    queryFn: async () => {
+      try {
+        return await dashboardRunsApi.getRunsSummary();
+      } catch {
+        return null;
+      }
+    },
+    refetchInterval: 10_000,
+    retry: false,
   });
 
   const liveRunDetailQuery = useQuery({
@@ -552,28 +1088,78 @@ export function InstancesPage() {
     refetchInterval: 10_000,
   });
 
+  const staticWorkspaceInstances = useMemo(() => {
+    return Object.fromEntries(
+      Object.values(instances)
+        .filter((item) => item.workspaceId === currentWorkspace.id)
+        .map((item) => [item.id, item])
+    ) as Record<string, InstanceRecord>;
+  }, [currentWorkspace.id]);
+
   const liveInstances = useMemo(() => {
     const list = runsQuery.data ?? [];
-    return Object.fromEntries(
-      list.map((snapshot) => [snapshot.run.runId, mapRunSnapshotToInstanceRecord(snapshot)])
-    ) as Record<string, InstanceRecord>;
-  }, [runsQuery.data]);
+    const mapped = list
+      .map((snapshot) => mapRunSnapshotToInstanceRecord(snapshot, undefined, currentWorkspace))
+      .filter((item) => item.workspaceId === currentWorkspace.id);
+
+    return Object.fromEntries(mapped.map((item) => [item.id, item])) as Record<string, InstanceRecord>;
+  }, [currentWorkspace, runsQuery.data]);
+
+  const filteredLiveInstances = useMemo(() => {
+    const list = filteredRunsQuery.data ?? [];
+    return list
+      .map((snapshot) => mapRunSnapshotToInstanceRecord(snapshot, undefined, currentWorkspace))
+      .filter((item) => item.workspaceId === currentWorkspace.id)
+      .sort((left, right) => {
+        const leftLive = Number(isLiveRunId(left.id));
+        const rightLive = Number(isLiveRunId(right.id));
+
+        if (leftLive !== rightLive) {
+          return rightLive - leftLive;
+        }
+
+        return left.id.localeCompare(right.id);
+      });
+  }, [currentWorkspace, filteredRunsQuery.data]);
+
+  const detailedLiveInstance = useMemo(() => {
+    if (!liveRunDetailQuery.data) {
+      return null;
+    }
+
+    const mapped = mapRunSnapshotToInstanceRecord(
+      liveRunDetailQuery.data,
+      liveRunFilesQuery.data,
+      currentWorkspace
+    );
+
+    return mapped.workspaceId === currentWorkspace.id ? mapped : null;
+  }, [currentWorkspace, liveRunDetailQuery.data, liveRunFilesQuery.data]);
+
+  const instanceDataMode =
+    (runsSummaryQuery.data?.total ?? 0) > 0 || Object.keys(liveInstances).length > 0 || Boolean(detailedLiveInstance)
+      ? "live"
+      : currentWorkspace.source === "auth"
+        ? "empty"
+        : "static";
 
   const mergedInstances = useMemo(() => {
-    const next: Record<string, InstanceRecord> = { ...instances, ...liveInstances };
+    const next: Record<string, InstanceRecord> =
+      instanceDataMode === "live"
+        ? { ...liveInstances }
+        : instanceDataMode === "static"
+          ? { ...staticWorkspaceInstances }
+          : {};
 
-    if (liveRunDetailQuery.data) {
-      next[liveRunDetailQuery.data.run.runId] = mapRunSnapshotToInstanceRecord(
-        liveRunDetailQuery.data,
-        liveRunFilesQuery.data
-      );
+    if (detailedLiveInstance) {
+      next[detailedLiveInstance.id] = detailedLiveInstance;
     }
 
     return next;
-  }, [liveInstances, liveRunDetailQuery.data, liveRunFilesQuery.data]);
+  }, [detailedLiveInstance, instanceDataMode, liveInstances, staticWorkspaceInstances]);
 
   const sortedInstances = useMemo(() => {
-    const all = Object.values(mergedInstances).filter((item) => item.workspaceId === currentWorkspace.id);
+    const all = Object.values(mergedInstances);
     return all.sort((left, right) => {
       const leftLive = Number(isLiveRunId(left.id));
       const rightLive = Number(isLiveRunId(right.id));
@@ -584,9 +1170,13 @@ export function InstancesPage() {
 
       return left.id.localeCompare(right.id);
     });
-  }, [currentWorkspace, mergedInstances]);
+  }, [mergedInstances]);
 
   const filteredInstances = useMemo(() => {
+    if (instanceDataMode === "live") {
+      return filteredLiveInstances;
+    }
+
     return sortedInstances.filter((item) => {
       const attention = getInstanceAttention(item);
       const tags = getInstanceTags(item);
@@ -627,11 +1217,15 @@ export function InstancesPage() {
         ...tags,
       ]);
     });
-  }, [listMode, searchQuery, sortedInstances, statusFilter, tagFilter]);
+  }, [filteredLiveInstances, instanceDataMode, listMode, searchQuery, sortedInstances, statusFilter, tagFilter]);
 
   const availableTags = useMemo(() => {
+    if (runsSummaryQuery.data) {
+      return runsSummaryQuery.data.byTag.map((item) => item.key).filter((tag) => tag.startsWith("#")).slice(0, 6);
+    }
+
     return Array.from(new Set(sortedInstances.flatMap((item) => getInstanceTags(item)))).slice(0, 6);
-  }, [sortedInstances]);
+  }, [runsSummaryQuery.data, sortedInstances]);
 
   const groupedInstances = useMemo(() => {
     const groups = [
@@ -662,19 +1256,20 @@ export function InstancesPage() {
   }, [filteredInstances, lang]);
 
   useEffect(() => {
-    if (instanceId && mergedInstances[instanceId]?.workspaceId === currentWorkspace.id) {
-      setActiveInstanceId(instanceId);
+    if (instanceId) {
+      const routeInstance = mergedInstances[instanceId];
+      if (routeInstance?.workspaceId === currentWorkspace.id) {
+        setActiveInstanceId(instanceId);
+      } else if (activeInstanceId) {
+        setActiveInstanceId("");
+      }
       return;
     }
 
     if (sortedInstances.length === 0) {
-      return;
-    }
-
-    if (instanceId && mergedInstances[instanceId]?.workspaceId !== currentWorkspace.id) {
-      const fallbackId = sortedInstances[0].id;
-      setActiveInstanceId(fallbackId);
-      navigate(dashboardRoutes.instance(fallbackId), { replace: true });
+      if (activeInstanceId) {
+        setActiveInstanceId("");
+      }
       return;
     }
 
@@ -707,29 +1302,117 @@ export function InstancesPage() {
     }
   }, [detailTab, instanceId, setInstanceTab]);
 
-  const instance = sortedInstances.find((item) => item.id === activeInstanceId) ?? sortedInstances[0] ?? instances["tax-q2"];
-  const liveMode = isLiveRunId(instance.id);
-  const runStream = useDashboardRunStream(liveMode ? instance.id : null, liveMode);
-  const draft = instanceDrafts[instance.id] ?? "";
+  const fallbackStaticInstance = Object.values(staticWorkspaceInstances)[0] ?? null;
+  const routeInstance = instanceId ? mergedInstances[instanceId] ?? null : null;
+  const routeInstanceOutOfScope = Boolean(instanceId) && routeInstance == null;
+  const instance =
+    routeInstance ??
+    (!instanceId
+      ? sortedInstances.find((item) => item.id === activeInstanceId) ??
+        sortedInstances[0] ??
+        fallbackStaticInstance
+      : null);
+  const liveMode = Boolean(instance && isLiveRunId(instance.id));
+  const sampleMode = Boolean(instance && !liveMode);
+  useDashboardRecentRecorder(
+    instance && liveMode && currentWorkspace.source === "auth"
+      ? {
+          resourceType: "run",
+          runId: instance.id,
+          interaction: "resume",
+          sourceSurface: "dashboard",
+        }
+      : null,
+    currentWorkspace.source === "auth"
+  );
+  const runStream = useDashboardRunStream(instance?.id ?? null, liveMode);
+  const [attachmentDraftsByInstance, setAttachmentDraftsByInstance] = useState<
+    Record<string, BrowserAttachmentDraft[]>
+  >({});
+  const [composerError, setComposerError] = useState("");
+  const draft = instance ? instanceDrafts[instance.id] ?? "" : "";
+  const attachmentDrafts = instance ? attachmentDraftsByInstance[instance.id] ?? [] : [];
+
+  const setInstanceAttachments = (instanceId: string, next: BrowserAttachmentDraft[]) => {
+    setAttachmentDraftsByInstance((current) => ({
+      ...current,
+      [instanceId]: next,
+    }));
+  };
+
+  const clearInstanceAttachments = (instanceId: string) => {
+    setAttachmentDraftsByInstance((current) => {
+      const next = { ...current };
+      delete next[instanceId];
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    setComposerError("");
+  }, [instance?.id]);
 
   const sendMessageMutation = useMutation({
-    mutationFn: async (text: string) =>
-      dashboardRunsApi.sendRunMessage(instance.id, {
-        text,
-        attachments: [],
-      }),
+    mutationFn: async (input: { text: string; drafts: BrowserAttachmentDraft[] }) => {
+      if (!instance) {
+        throw new Error(
+          t(lang, { zh: "当前工作区没有可用实例。", en: "There is no available run in the current workspace." })
+        );
+      }
+
+      const attachments = await Promise.all(
+        input.drafts.map(async (draftAttachment) =>
+          uploadRunAttachment(dashboardRunsApi, instance.id, {
+            fileName: draftAttachment.file.name,
+            contentType: draftAttachment.contentType,
+            sizeBytes: draftAttachment.sizeBytes,
+            content: await draftAttachment.file.arrayBuffer(),
+            label: draftAttachment.label,
+          })
+        )
+      );
+
+      const payload = {
+        text: input.text.trim() || t(lang, {
+          zh: "我补充了附件，请读取并继续。",
+          en: "I added attachments. Please read them and continue.",
+        }),
+        attachments,
+      };
+
+      if (liveMode && runStream.sendMessage(payload)) {
+        return null;
+      }
+
+      return await dashboardRunsApi.sendRunMessage(instance.id, payload);
+    },
     onSuccess: async () => {
+      if (!instance) {
+        return;
+      }
+
       clearInstanceDraft(instance.id);
+      clearInstanceAttachments(instance.id);
+      setComposerError("");
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["dashboard", "runs"] }),
         queryClient.invalidateQueries({ queryKey: ["dashboard", "runs", instance.id] }),
         queryClient.invalidateQueries({ queryKey: ["dashboard", "runs", instance.id, "files"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "billing"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "me", "recent"] }),
       ]);
+    },
+    onError: (error) => {
+      setComposerError(
+        error instanceof Error
+          ? error.message
+          : t(lang, { zh: "发送失败，请稍后重试。", en: "Sending failed. Please try again." })
+      );
     },
   });
 
   return (
-    <section className="view">
+    <section className="view" data-testid="dashboard-instances-page">
       <article className="filter-card">
         <div className="section-head">
           <div>
@@ -814,6 +1497,30 @@ export function InstancesPage() {
             en: `Current workspace root: ${currentWorkspace.root}. Filters keep ${filteredInstances.length} runs; switching instances preserves the input draft while the right detail pane keeps the same run context.`,
           })}
         </div>
+        {routeInstanceOutOfScope ? (
+          <div className="section-note">
+            {t(lang, {
+              zh: "当前 URL 指向的实例不在这个工作区内，面板不会再静默跳转到别的实例。请从左侧列表重新选择，或切换到对应工作区。",
+              en: "The URL points to a run outside this workspace. The panel no longer silently switches to another run; choose one from the list or switch workspaces.",
+            })}
+          </div>
+        ) : null}
+        {instanceDataMode === "static" ? (
+          <div className="section-note">
+            {t(lang, {
+              zh: "当前工作区尚未检测到真实 run 列表，实例面板正在展示样例实例结构。真实实例建立后，列表会自动切换到 live 数据主链。",
+              en: "No live run list was detected for the current workspace yet. The instance surface is showing sample structures and will switch to the live data chain automatically once real runs appear.",
+            })}
+          </div>
+        ) : null}
+        {instanceDataMode === "empty" ? (
+          <div className="section-note">
+            {t(lang, {
+              zh: "当前工作区还没有真实实例记录。认证工作区不会再混入样例实例，实例列表会在首个 run 建立后直接切到 live 数据主链。",
+              en: "No live run has been recorded in this workspace yet. Authenticated workspaces no longer mix in sample runs, and the list will switch directly to the live data chain after the first run is created.",
+            })}
+          </div>
+        ) : null}
       </article>
 
       <div className="instance-layout">
@@ -892,47 +1599,89 @@ export function InstancesPage() {
         </div>
 
         <div className="conversation-shell">
-          <details className="summary-panel" open>
-            <summary>
+          {instance ? (
+            <details className="summary-panel" open>
+              <summary>
+                <div className="section-head">
+                  <div>
+                    <div className="eyebrow">{t(lang, { zh: "当前实例", en: "Active Instance" })}</div>
+                    <div className="detail-title">{t(lang, instance.title)}</div>
+                    <div className="meta">{t(lang, instance.summary)}</div>
+                  </div>
+                  <div className="pill-row">
+                    <span className={`pill ${instance.statusClass}`}>{t(lang, instance.status)}</span>
+                    <span className="pill active">{t(lang, instance.workspace)}</span>
+                    {sampleMode ? (
+                      <span className="pill warn">{t(lang, { zh: "样例实例", en: "Sample run" })}</span>
+                    ) : null}
+                  </div>
+                </div>
+              </summary>
+              <div className="summary-panel-body">
+                <div className="pill-row">
+                  <span className="path-chip active">{instance.route}</span>
+                  <span className="path-chip">{instance.targetPath}</span>
+                  <span className="path-chip warn">{t(lang, instance.nextAction)}</span>
+                </div>
+                <div className="quick-grid">
+                  {instance.metrics.map((item) => (
+                    <div className="quick-box" key={t(lang, item.label)}>
+                      <div className="quick-label">{t(lang, item.label)}</div>
+                      <div className="quick-value">{t(lang, item.value)}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </details>
+          ) : (
+            <article className="filter-card">
               <div className="section-head">
                 <div>
                   <div className="eyebrow">{t(lang, { zh: "当前实例", en: "Active Instance" })}</div>
-                  <div className="detail-title">{t(lang, instance.title)}</div>
-                  <div className="meta">{t(lang, instance.summary)}</div>
-                </div>
-                <div className="pill-row">
-                  <span className={`pill ${instance.statusClass}`}>{t(lang, instance.status)}</span>
-                  <span className="pill active">{t(lang, instance.workspace)}</span>
-                </div>
-              </div>
-            </summary>
-            <div className="summary-panel-body">
-              <div className="pill-row">
-                <span className="path-chip active">{instance.route}</span>
-                <span className="path-chip">{instance.targetPath}</span>
-                <span className="path-chip warn">{t(lang, instance.nextAction)}</span>
-              </div>
-              <div className="quick-grid">
-                {instance.metrics.map((item) => (
-                  <div className="quick-box" key={t(lang, item.label)}>
-                    <div className="quick-label">{t(lang, item.label)}</div>
-                    <div className="quick-value">{t(lang, item.value)}</div>
+                  <div className="detail-title">
+                    {routeInstanceOutOfScope
+                      ? t(lang, { zh: "实例超出当前工作区", en: "Run is outside the current workspace" })
+                      : t(lang, { zh: "当前工作区暂无实例", en: "No runs in this workspace" })}
                   </div>
-                ))}
+                </div>
               </div>
-            </div>
-          </details>
+              <div className="section-note">
+                {routeInstanceOutOfScope
+                  ? t(lang, {
+                      zh: "这个实例链接已经越过当前工作区边界。你可以从左侧重新选择一个实例，或切换回它所属的工作区。",
+                      en: "This run link crossed the current workspace boundary. Pick another run from the list or switch back to the workspace that owns it.",
+                    })
+                  : t(lang, {
+                      zh: "先回到工坊启动一个实例，或者切换到已有实例的工作区。",
+                      en: "Return to workshops to launch a run, or switch to a workspace that already has runs.",
+                    })}
+              </div>
+            </article>
+          )}
 
           <div className="thread">
-            {instance.messages.map((message, index) => (
+            {instance ? instance.messages.map((message, index) => (
               <article className={`message-card ${message.kind}`} key={`${message.time}-${index}`}>
                 <div className="message-head">
                   <div className="message-title">{t(lang, message.title)}</div>
                   <div className="message-meta">{message.time}</div>
                 </div>
                 <div className="message-body">{t(lang, message.body)}</div>
+                {message.attachments?.length ? (
+                  <div className="message-attachment-list">
+                    {message.attachments.map((attachment) => (
+                      <div
+                        className="message-attachment-chip"
+                        key={`${attachment.path}-${attachment.label}`}
+                      >
+                        <div className="message-attachment-label">{attachment.label}</div>
+                        <div className="message-attachment-meta">{attachment.path}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </article>
-            ))}
+            )) : null}
           </div>
 
           <div className="composer">
@@ -945,7 +1694,7 @@ export function InstancesPage() {
               </div>
               <span className="pill active">{t(lang, { zh: "中央主视图", en: "Primary focus" })}</span>
             </div>
-            {liveMode ? (
+            {instance ? liveMode ? (
               <>
                 <textarea
                   className="composer-box composer-input"
@@ -956,29 +1705,100 @@ export function InstancesPage() {
                     en: "Ask follow-up questions, add material notes, request the next step, or tell Codex what to do now.",
                   })}
                 />
+                {composerError ? <div className="composer-error">{composerError}</div> : null}
+                {attachmentDrafts.length > 0 ? (
+                  <div className="attachment-draft-list">
+                    {attachmentDrafts.map((attachment) => (
+                      <div className="attachment-draft-card" key={attachment.id}>
+                        <div>
+                          <div className="attachment-draft-title">{attachment.label}</div>
+                          <div className="attachment-draft-meta">
+                            {formatAttachmentSize(attachment.sizeBytes)}
+                            {attachment.contentType ? ` / ${attachment.contentType}` : ""}
+                          </div>
+                        </div>
+                        <button
+                          className="path-chip warn"
+                          type="button"
+                          onClick={() =>
+                            setInstanceAttachments(
+                              instance.id,
+                              attachmentDrafts.filter((item) => item.id !== attachment.id)
+                            )
+                          }
+                        >
+                          {t(lang, { zh: "移除", en: "Remove" })}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
                 <div className="pill-row">
                   <span className="path-chip">{t(lang, { zh: "追问结果", en: "Ask about results" })}</span>
-                  <span className="path-chip">{t(lang, { zh: "补充材料", en: "Add materials" })}</span>
-                  <span className="path-chip">{t(lang, { zh: "生成摘要", en: "Generate brief" })}</span>
+                  <button
+                    className="path-chip"
+                    type="button"
+                    disabled={sendMessageMutation.isPending}
+                    onClick={async () => {
+                      try {
+                        setComposerError("");
+                        const picked = await pickBrowserAttachments({ multiple: true });
+                        if (!picked.length) {
+                          return;
+                        }
+
+                        setInstanceAttachments(instance.id, [...attachmentDrafts, ...picked]);
+                      } catch (error) {
+                        setComposerError(
+                          error instanceof Error
+                            ? error.message
+                            : t(lang, {
+                                zh: "当前环境暂不支持选择附件。",
+                                en: "The current environment does not support local file selection.",
+                              })
+                        );
+                      }
+                    }}
+                  >
+                    {t(lang, { zh: "补充材料", en: "Add materials" })}
+                  </button>
+                  <button
+                    className="path-chip"
+                    type="button"
+                    onClick={() =>
+                      setInstanceDraft(
+                        instance.id,
+                        t(lang, {
+                          zh: "请告诉我当前待审批动作是什么，并引导我逐项确认。",
+                          en: "Please explain the pending approval items and guide me through them one by one.",
+                        })
+                      )
+                    }
+                  >
+                    {t(lang, { zh: "审批说明", en: "Explain approvals" })}
+                  </button>
                   <button
                     className="route-btn active"
                     type="button"
-                    disabled={!draft.trim() || sendMessageMutation.isPending}
+                    disabled={
+                      sendMessageMutation.isPending ||
+                      (!draft.trim() && attachmentDrafts.length === 0)
+                    }
                     onClick={() => {
-                      if (!draft.trim()) {
+                      if (!draft.trim() && attachmentDrafts.length === 0) {
                         return;
                       }
-
-                      if (liveMode && runStream.sendMessage(draft.trim())) {
-                        clearInstanceDraft(instance.id);
-                        return;
-                      }
-
-                      sendMessageMutation.mutate(draft.trim());
+                      setComposerError("");
+                      sendMessageMutation.mutate({
+                        text: draft,
+                        drafts: attachmentDrafts,
+                      });
                     }}
                   >
                     {sendMessageMutation.isPending
-                      ? t(lang, { zh: "发送中", en: "Sending" })
+                      ? attachmentDrafts.length > 0
+                        ? t(lang, { zh: "上传并发送中", en: "Uploading and sending" })
+                        : t(lang, { zh: "发送中", en: "Sending" })
                       : runStream.connected
                         ? t(lang, { zh: "通过实时链路发送", en: "Send via realtime channel" })
                         : t(lang, { zh: "发送消息", en: "Send message" })}
@@ -999,6 +1819,18 @@ export function InstancesPage() {
                   <span className="path-chip">{t(lang, { zh: "生成摘要", en: "Generate brief" })}</span>
                 </div>
               </>
+            ) : (
+              <div className="composer-box">
+                {routeInstanceOutOfScope
+                  ? t(lang, {
+                      zh: "当前链接指向的实例不在这个工作区里。请先从列表选择一个可见实例，再继续完整对话。",
+                      en: "The linked run is not visible in this workspace. Select a visible run from the list before continuing the full conversation.",
+                    })
+                  : t(lang, {
+                      zh: "当前没有可继续对话的实例。请先从工坊启动一个真实实例。",
+                      en: "There is no run to continue here yet. Launch a real run from the workshop first.",
+                    })}
+              </div>
             )}
           </div>
         </div>
@@ -1020,14 +1852,34 @@ export function InstancesPage() {
                   type="button"
                   onClick={() => {
                     setInstanceTab(key);
-                    navigate(dashboardRoutes.instance(instance.id, key));
+                    if (instance) {
+                      navigate(dashboardRoutes.instance(instance.id, key));
+                    }
                   }}
                 >
                   {t(lang, label)}
                 </button>
               ))}
             </div>
-            <InstanceTabPanel instance={instance} liveMode={liveMode} />
+            {instance ? (
+              <InstanceTabPanel instance={instance} liveMode={liveMode} />
+            ) : (
+              <div className="detail-body">
+                <div className="detail-item">
+                  <div className="meta">
+                    {routeInstanceOutOfScope
+                      ? t(lang, {
+                          zh: "当前实例链接不属于这个工作区，因此不会加载右侧详情。",
+                          en: "The current run link does not belong to this workspace, so the right-side detail panel stays empty.",
+                        })
+                      : t(lang, {
+                          zh: "当前工作区没有可展开的实例详情。",
+                          en: "There is no instance detail to expand in the current workspace.",
+                        })}
+                  </div>
+                </div>
+              </div>
+            )}
           </article>
         </div>
       </div>

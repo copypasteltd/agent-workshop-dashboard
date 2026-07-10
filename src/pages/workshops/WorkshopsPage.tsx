@@ -1,13 +1,55 @@
+import type { ServiceCatalogEntry, WorkshopCatalogEntry } from "@lingban/contracts";
 import { matchesSearchQuery } from "@lingban/domain-models";
 import { useMemo, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
-import { dashboardRunsApi } from "../../lib/api";
-import { dashboardServices, dashboardWorkspaces, instances, workshops } from "../../data/dashboardData";
+import { dashboardCatalogApi, dashboardMeApi, dashboardRunsApi } from "../../lib/api";
+import {
+  instances,
+  type DashboardService,
+  type Workshop,
+} from "../../data/dashboardData";
 import { t } from "../../lib/i18n";
-import { buildDashboardRunInput } from "../../lib/runTemplates";
+import { useDashboardRecentRecorder } from "../../lib/recent";
+import { mapRunSnapshotToInstanceRecord } from "../../lib/liveRunAdapters";
 import { dashboardRoutes } from "../../lib/routes";
+import { resolveDashboardWorkspaceView } from "../../lib/workspaceContext";
+import { useDashboardAuthStore } from "../../stores/dashboardAuthStore";
 import { useDashboardUiStore } from "../../stores/dashboardUiStore";
+
+type FavoriteWorkshopMutationInput = {
+  workshopId: string;
+  favorited: boolean;
+};
+
+function mapCatalogWorkshopToDashboardWorkshop(item: WorkshopCatalogEntry): Workshop {
+  return {
+    id: item.workshopId,
+    cover: item.coverAssetUrl,
+    title: item.displayName,
+    badge: item.badge,
+    audience: item.audience,
+    summary: item.summary,
+    route: `dashboard://workshops/${item.workshopId}`,
+    next: item.nextStepSummary,
+    tags: item.tagList,
+    linkedService: item.defaultServiceId,
+    linkedInstance: "",
+  };
+}
+
+function mapCatalogServiceToDashboardService(item: ServiceCatalogEntry): DashboardService {
+  return {
+    id: item.serviceId,
+    workshopId: item.workshopId,
+    name: item.displayName,
+    summary: item.summary,
+    auth: item.authRequirementText,
+    eta: item.estimatedDuration,
+    targetPath: item.targetPathHint,
+    linkedInstance: item.linkedInstanceHint ?? "",
+  };
+}
 
 export function WorkshopsPage() {
   const navigate = useNavigate();
@@ -19,37 +61,160 @@ export function WorkshopsPage() {
     "all"
   );
   const currentWorkspaceId = useDashboardUiStore((state) => state.currentWorkspaceId);
-  const currentWorkspace =
-    dashboardWorkspaces.find((item) => item.id === currentWorkspaceId) ?? dashboardWorkspaces[0];
+  const authMode = useDashboardAuthStore((state) => state.authMode);
+  const authenticated = useDashboardAuthStore((state) => state.authenticated);
+  const authWorkspaces = useDashboardAuthStore((state) => state.workspaces);
+  const authCurrentWorkspace = useDashboardAuthStore((state) => state.currentWorkspace);
+  const currentWorkspace = useMemo(
+    () =>
+      resolveDashboardWorkspaceView({
+        selectionId: currentWorkspaceId,
+        workspaces: authMode === "required" ? authWorkspaces : undefined,
+        fallbackWorkspaceId: authCurrentWorkspace?.workspaceId,
+      }),
+    [authCurrentWorkspace?.workspaceId, authMode, authWorkspaces, currentWorkspaceId]
+  );
+  const favoritesEnabled = currentWorkspace.source === "auth";
+
+  const workshopsQuery = useQuery({
+    queryKey: [
+      "dashboard",
+      "catalog",
+      "workshops",
+      currentWorkspace.selectionId,
+      currentWorkspace.id,
+    ],
+    queryFn: async () =>
+      dashboardCatalogApi.listWorkshops({
+        workspaceContextKey: currentWorkspace.id,
+        entrySurface: "dashboard",
+      }),
+    retry: false,
+    staleTime: 30_000,
+  });
+  const servicesQuery = useQuery({
+    queryKey: [
+      "dashboard",
+      "catalog",
+      "services",
+      currentWorkspace.selectionId,
+      currentWorkspace.id,
+    ],
+    queryFn: async () =>
+      dashboardCatalogApi.listServices({
+        workspaceContextKey: currentWorkspace.id,
+        entrySurface: "dashboard",
+      }),
+    retry: false,
+    staleTime: 30_000,
+  });
+  const runsQuery = useQuery({
+    queryKey: ["dashboard", "runs", "workshops", currentWorkspace.selectionId, currentWorkspace.id],
+    queryFn: async () => {
+      try {
+        return await dashboardRunsApi.listRuns();
+      } catch {
+        return [];
+      }
+    },
+    retry: false,
+    refetchInterval: 10_000,
+  });
+  const favoriteWorkshopsQuery = useQuery({
+    queryKey: ["dashboard", "me", "favorites", currentWorkspace.selectionId, currentWorkspace.id],
+    queryFn: async () => dashboardMeApi.listFavoriteWorkshops({ limit: 50 }),
+    enabled: authMode === "required" && authenticated && favoritesEnabled,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const recentActivitiesQuery = useQuery({
+    queryKey: ["dashboard", "me", "recent", currentWorkspace.selectionId, currentWorkspace.id],
+    queryFn: async () =>
+      dashboardMeApi.listRecentActivities({
+        limit: 3,
+        types: ["run"],
+      }),
+    enabled: authMode === "required" && authenticated && favoritesEnabled,
+    retry: false,
+    staleTime: 15_000,
+  });
+  const catalogError = workshopsQuery.error ?? servicesQuery.error;
   const launchRunMutation = useMutation({
     mutationFn: async (targetServiceId: string) => {
-      const input = buildDashboardRunInput(targetServiceId);
-
-      if (!input) {
-        throw new Error(`Missing run template for service ${targetServiceId}`);
-      }
-
-      return dashboardRunsApi.createRun(input);
+      const template = await dashboardCatalogApi.createLaunchTemplate(targetServiceId, {
+        workspaceContextKey: currentWorkspace.id,
+        workspaceId:
+          currentWorkspace.source === "auth"
+            ? currentWorkspace.runtimeWorkspaceId
+            : undefined,
+        entrySurface: "dashboard",
+      });
+      return dashboardRunsApi.createRun(template.createRunInput);
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["dashboard", "runs"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "me", "recent"] }),
+      ]);
+    },
+  });
+  const favoriteWorkshopMutation = useMutation({
+    mutationFn: async (input: FavoriteWorkshopMutationInput) =>
+      dashboardMeApi.setFavoriteWorkshop(input.workshopId, {
+        favorited: input.favorited,
+      }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "me", "favorites"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "me", "summary"] }),
+      ]);
     },
   });
 
   const visibleWorkshops = useMemo(
-    () => workshops.filter((item) => currentWorkspace.workshopIds.includes(item.id)),
-    [currentWorkspace]
+    () => (workshopsQuery.data ?? []).map(mapCatalogWorkshopToDashboardWorkshop),
+    [workshopsQuery.data]
   );
 
   const visibleServices = useMemo(
-    () => dashboardServices.filter((item) => currentWorkspace.workshopIds.includes(item.workshopId)),
-    [currentWorkspace]
+    () => (servicesQuery.data ?? []).map(mapCatalogServiceToDashboardService),
+    [servicesQuery.data]
   );
 
   const visibleInstances = useMemo(
-    () => Object.values(instances).filter((item) => item.workspaceId === currentWorkspace.id),
-    [currentWorkspace]
+    () =>
+      runsQuery.isSuccess
+        ? runsQuery.data
+            .map((snapshot) => mapRunSnapshotToInstanceRecord(snapshot, undefined, currentWorkspace))
+            .filter((item) => item.workspaceId === currentWorkspace.id)
+        : currentWorkspace.source === "auth"
+          ? []
+          : Object.values(instances).filter((item) => item.workspaceId === currentWorkspace.id),
+    [currentWorkspace, runsQuery.data, runsQuery.isSuccess]
   );
+
+  const favoritedWorkshopIds = useMemo(
+    () => new Set((favoriteWorkshopsQuery.data?.items ?? []).map((item) => item.workshopId)),
+    [favoriteWorkshopsQuery.data]
+  );
+  const recentVisibleInstances = useMemo(() => {
+    const recentRunIds =
+      recentActivitiesQuery.data?.items
+        .map((item) => item.runId)
+        .filter((item): item is string => typeof item === "string" && item.length > 0) ?? [];
+
+    if (recentRunIds.length === 0) {
+      return visibleInstances.slice(0, 3);
+    }
+
+    const instanceById = new Map(visibleInstances.map((item) => [item.id, item] as const));
+    const ordered = recentRunIds
+      .map((runId) => instanceById.get(runId))
+      .filter((item): item is (typeof visibleInstances)[number] => item != null);
+    const seen = new Set(ordered.map((item) => item.id));
+
+    return [...ordered, ...visibleInstances.filter((item) => !seen.has(item.id))].slice(0, 3);
+  }, [recentActivitiesQuery.data, visibleInstances]);
 
   const filteredWorkshops = useMemo(() => {
     return visibleWorkshops.filter((item) => {
@@ -106,32 +271,144 @@ export function WorkshopsPage() {
     if (workshopId) {
       return visibleWorkshops.find((item) => item.id === workshopId) ?? null;
     }
+
     if (selectedService) {
       return visibleWorkshops.find((item) => item.id === selectedService.workshopId) ?? null;
     }
+
     return null;
   }, [selectedService, visibleWorkshops, workshopId]);
 
   const focusService =
     selectedService ??
-    (selectedWorkshop ? visibleServices.find((item) => item.id === selectedWorkshop.linkedService) ?? null : null);
+    (selectedWorkshop
+      ? visibleServices.find((item) => item.id === selectedWorkshop.linkedService) ?? null
+      : null);
+  const selectedWorkshopFavorited = selectedWorkshop
+    ? favoritedWorkshopIds.has(selectedWorkshop.id)
+    : false;
+  const favoriteCountLabel = favoritesEnabled
+    ? String(favoriteWorkshopsQuery.data?.totalCount ?? 0).padStart(2, "0")
+    : "--";
+  const favoriteMutationTargetId = favoriteWorkshopMutation.variables?.workshopId ?? null;
+
+  useDashboardRecentRecorder(
+    favoritesEnabled && selectedService
+      ? {
+          resourceType: "service",
+          serviceId: selectedService.id,
+          interaction: "open",
+          sourceSurface: "dashboard",
+        }
+      : favoritesEnabled && selectedWorkshop
+        ? {
+            resourceType: "workshop",
+            workshopId: selectedWorkshop.id,
+            interaction: "open",
+            sourceSurface: "dashboard",
+          }
+        : null,
+    favoritesEnabled
+  );
+
+  const handleFavoriteToggle = async (targetWorkshopId: string, favorited: boolean) => {
+    try {
+      await favoriteWorkshopMutation.mutateAsync({
+        workshopId: targetWorkshopId,
+        favorited,
+      });
+    } catch {
+      return;
+    }
+  };
+
+  const renderFavoriteButton = (targetWorkshopId: string, favorited: boolean) => {
+    const busy =
+      favoriteWorkshopMutation.isPending && favoriteMutationTargetId === targetWorkshopId;
+
+    return (
+      <button
+        aria-pressed={favorited}
+        className={`route-btn favorite-action ${favorited ? "active" : ""}`}
+        disabled={busy}
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          void handleFavoriteToggle(targetWorkshopId, !favorited);
+        }}
+      >
+        <svg className="icon inline-icon">
+          <use href="#i-heart" />
+        </svg>
+        {busy
+          ? t(lang, { zh: "同步中", en: "Saving" })
+          : favorited
+            ? t(lang, { zh: "已收藏", en: "Favorited" })
+            : t(lang, { zh: "收藏工坊", en: "Favorite workshop" })}
+      </button>
+    );
+  };
 
   return (
-    <section className="view">
+    <section className="view" data-testid="dashboard-workshops-page">
       <article className="hero-card">
         <div className="section-head">
           <div>
             <div className="eyebrow">{t(lang, { zh: "工坊总览", en: "Workshop Overview" })}</div>
-            <h2 className="hero-title">{t(lang, { zh: "先选工坊，再进入实例对话", en: "Choose a workshop first, then enter the live instance conversation" })}</h2>
+            <h2 className="hero-title">
+              {t(lang, {
+                zh: "先选工坊，再进入实例对话",
+                en: "Choose a workshop first, then enter the live instance conversation",
+              })}
+            </h2>
           </div>
           <span className="pill active">dashboard://workshops</span>
         </div>
-        <div className="section-note">{t(lang, { zh: "这一页承担工坊浏览、工坊详情和服务启动台三类动作。重型运行细节留给实例页，Creator 只处理包与治理。", en: "This surface handles workshop browse, workshop detail, and the service launchpad. Heavy runtime detail stays in instances while Creator stays focused on packages and governance." })}</div>
+        <div className="section-note">
+          {t(lang, {
+            zh: "这一页承担工坊浏览、工坊详情和服务启动台三类动作。重型运行细节留给实例页，Creator 只处理包与治理。",
+            en: "This surface handles workshop browse, workshop detail, and the service launchpad. Heavy runtime detail stays in instances while Creator stays focused on packages and governance.",
+          })}
+        </div>
         <div className="metric-grid">
           {[
-            { label: { zh: "可见工坊", en: "Visible workshops" }, value: String(visibleWorkshops.length).padStart(2, "0"), note: { zh: "当前空间能直接消费的工坊集合。", en: "The workshop set directly consumable inside the current workspace." } },
-            { label: { zh: "即开服务", en: "Runnable services" }, value: String(visibleServices.length).padStart(2, "0"), note: { zh: "启动后直接进入实例对话。", en: "Launches lead directly into the instance conversation." } },
-            { label: { zh: "当前工作区", en: "Current workspace" }, value: t(lang, currentWorkspace.name), note: { zh: "切换工作区会同步收敛可见工坊、实例与 Creator 包。", en: "Switching workspaces simultaneously narrows visible workshops, instances, and creator packages." } },
+            {
+              label: { zh: "可见工坊", en: "Visible workshops" },
+              value: String(visibleWorkshops.length).padStart(2, "0"),
+              note: {
+                zh: "当前空间能直接消费的工坊集合。",
+                en: "The workshop set directly consumable inside the current workspace.",
+              },
+            },
+            {
+              label: { zh: "即开服务", en: "Runnable services" },
+              value: String(visibleServices.length).padStart(2, "0"),
+              note: {
+                zh: "启动后直接进入实例对话。",
+                en: "Launches lead directly into the instance conversation.",
+              },
+            },
+            {
+              label: { zh: "收藏工坊", en: "Favorite workshops" },
+              value: favoriteCountLabel,
+              note: favoritesEnabled
+                ? {
+                    zh: "已与正式账户收藏同步。",
+                    en: "Synced with the formal account favorites.",
+                  }
+                : {
+                    zh: "预览工作区不写入账户收藏。",
+                    en: "Preview workspaces do not persist account favorites.",
+                  },
+            },
+            {
+              label: { zh: "当前工作区", en: "Current workspace" },
+              value: t(lang, currentWorkspace.name),
+              note: {
+                zh: "切换工作区会同步收敛可见工坊、实例与 Creator 包。",
+                en: "Switching workspaces simultaneously narrows visible workshops, instances, and creator packages.",
+              },
+            },
           ].map((item) => (
             <div className="metric-card" key={t(lang, item.label)}>
               <div className="metric-label">{t(lang, item.label)}</div>
@@ -154,7 +431,13 @@ export function WorkshopsPage() {
           <label className="fake-input">
             <svg
               className="icon"
-              style={{ display: "inline-block", verticalAlign: -4, width: 14, height: 14, marginRight: 6 }}
+              style={{
+                display: "inline-block",
+                verticalAlign: -4,
+                width: 14,
+                height: 14,
+                marginRight: 6,
+              }}
             >
               <use href="#i-search" />
             </svg>
@@ -204,6 +487,52 @@ export function WorkshopsPage() {
               en: `Matched ${filteredWorkshops.length} workshops / ${filteredServices.length} services. The workshop page answers three questions: which workshop to choose, which permissions the service needs, and where the user lands after launch.`,
             })}
           </div>
+          {catalogError ? (
+            <div className="section-note">
+              {t(lang, {
+                zh: `工坊目录暂时不可用：${catalogError.message}`,
+                en: `Catalog is temporarily unavailable: ${catalogError.message}`,
+              })}
+            </div>
+          ) : null}
+          {favoritesEnabled ? (
+            <div className="pill-row">
+              <span className="path-chip success">
+                {t(lang, { zh: "收藏已接入正式账户", en: "Favorites use the formal account" })}
+              </span>
+              <span className="path-chip active">
+                {t(lang, {
+                  zh: `当前已收藏 ${favoriteWorkshopsQuery.data?.totalCount ?? 0} 个工坊`,
+                  en: `${favoriteWorkshopsQuery.data?.totalCount ?? 0} workshops are favorited`,
+                })}
+              </span>
+            </div>
+          ) : (
+            <div className="pill-row">
+              <span className="path-chip">
+                {t(lang, {
+                  zh: "预览工作区不写入收藏",
+                  en: "Preview workspaces do not persist favorites",
+                })}
+              </span>
+            </div>
+          )}
+          {favoriteWorkshopsQuery.error instanceof Error ? (
+            <div className="section-note">
+              {t(lang, {
+                zh: `收藏状态暂时不可用：${favoriteWorkshopsQuery.error.message}`,
+                en: `Favorite status is temporarily unavailable: ${favoriteWorkshopsQuery.error.message}`,
+              })}
+            </div>
+          ) : null}
+          {favoriteWorkshopMutation.error instanceof Error ? (
+            <div className="section-note">
+              {t(lang, {
+                zh: `收藏同步失败：${favoriteWorkshopMutation.error.message}`,
+                en: `Favorite sync failed: ${favoriteWorkshopMutation.error.message}`,
+              })}
+            </div>
+          ) : null}
           <div className="pill-row">
             <span className="path-chip active">{t(lang, currentWorkspace.name)}</span>
             <span className="path-chip">{currentWorkspace.root}</span>
@@ -251,16 +580,51 @@ export function WorkshopsPage() {
                 <div className="file-name">{t(lang, { zh: "目标路径", en: "Target Path" })}</div>
                 <div className="route-code">{selectedService.targetPath}</div>
               </div>
+              {selectedWorkshop && favoritesEnabled ? (
+                <div className="detail-item">
+                  <div className="file-name">
+                    {t(lang, { zh: "收藏状态", en: "Favorite status" })}
+                  </div>
+                  <div className="meta">
+                    {selectedWorkshopFavorited
+                      ? t(lang, {
+                          zh: "该工坊已写入当前账户收藏。",
+                          en: "This workshop is already saved to the current account favorites.",
+                        })
+                      : t(lang, {
+                          zh: "该工坊尚未写入当前账户收藏。",
+                          en: "This workshop is not yet saved to the current account favorites.",
+                        })}
+                  </div>
+                </div>
+              ) : null}
               <div className="pill-row">
-                <span className="path-chip active">{t(lang, { zh: "启动后自动追问信息", en: "Prompts for missing info after launch" })}</span>
-                <span className="path-chip">{t(lang, { zh: "任务会话继承当前工作区", en: "The run inherits the current workspace" })}</span>
+                <span className="path-chip active">
+                  {t(lang, {
+                    zh: "启动后自动追问信息",
+                    en: "Prompts for missing info after launch",
+                  })}
+                </span>
+                <span className="path-chip">
+                  {t(lang, {
+                    zh: "任务会话继承当前工作区",
+                    en: "The run inherits the current workspace",
+                  })}
+                </span>
               </div>
               <div className="task-row">
                 {selectedWorkshop ? (
-                  <button className="route-btn" type="button" onClick={() => navigate(dashboardRoutes.workshop(selectedWorkshop.id))}>
+                  <button
+                    className="route-btn"
+                    type="button"
+                    onClick={() => navigate(dashboardRoutes.workshop(selectedWorkshop.id))}
+                  >
                     {t(lang, { zh: "查看工坊", en: "View workshop" })}
                   </button>
                 ) : null}
+                {selectedWorkshop && favoritesEnabled
+                  ? renderFavoriteButton(selectedWorkshop.id, selectedWorkshopFavorited)
+                  : null}
                 <button
                   className="route-btn active"
                   type="button"
@@ -269,7 +633,7 @@ export function WorkshopsPage() {
                       const created = await launchRunMutation.mutateAsync(selectedService.id);
                       navigate(dashboardRoutes.instance(created.run.runId));
                     } catch {
-                      navigate(dashboardRoutes.instance(selectedService.linkedInstance));
+                      return;
                     }
                   }}
                 >
@@ -278,6 +642,9 @@ export function WorkshopsPage() {
                     : t(lang, { zh: "打开实例对话", en: "Open instance conversation" })}
                 </button>
               </div>
+              {launchRunMutation.error instanceof Error ? (
+                <div className="section-note">{launchRunMutation.error.message}</div>
+              ) : null}
             </div>
           ) : selectedWorkshop && focusService ? (
             <div className="detail-body">
@@ -293,21 +660,54 @@ export function WorkshopsPage() {
                 <div className="file-name">{t(lang, { zh: "默认服务", en: "Default Service" })}</div>
                 <div className="meta">{t(lang, focusService.name)}</div>
               </div>
+              {favoritesEnabled ? (
+                <div className="detail-item">
+                  <div className="file-name">
+                    {t(lang, { zh: "收藏状态", en: "Favorite status" })}
+                  </div>
+                  <div className="meta">
+                    {selectedWorkshopFavorited
+                      ? t(lang, {
+                          zh: "当前账户已收藏该工坊，可从账户面板直接返回。",
+                          en: "The current account already favorited this workshop and can jump back from the account panel.",
+                        })
+                      : t(lang, {
+                          zh: "你可以先收藏该工坊，后续从账户面板快速返回。",
+                          en: "Favorite this workshop now to reopen it quickly from the account panel later.",
+                        })}
+                  </div>
+                </div>
+              ) : null}
               <div className="pill-row">
-                {selectedWorkshop.tags.map((tag) => <span className="path-chip" key={tag}>{tag}</span>)}
+                {selectedWorkshop.tags.map((tag) => (
+                  <span className="path-chip" key={tag}>
+                    {tag}
+                  </span>
+                ))}
               </div>
               <div className="task-row">
-                <button className="route-btn" type="button" onClick={() => navigate(dashboardRoutes.instances)}>
+                <button
+                  className="route-btn"
+                  type="button"
+                  onClick={() => navigate(dashboardRoutes.instances)}
+                >
                   {t(lang, { zh: "查看实例列表", en: "Open instances" })}
                 </button>
-                <button className="route-btn active" type="button" onClick={() => navigate(dashboardRoutes.service(focusService.id))}>
+                {favoritesEnabled
+                  ? renderFavoriteButton(selectedWorkshop.id, selectedWorkshopFavorited)
+                  : null}
+                <button
+                  className="route-btn active"
+                  type="button"
+                  onClick={() => navigate(dashboardRoutes.service(focusService.id))}
+                >
                   {t(lang, { zh: "进入服务启动台", en: "Open service launchpad" })}
                 </button>
               </div>
             </div>
           ) : (
             <div className="detail-body">
-              {visibleInstances.slice(0, 3).map((item) => (
+              {recentVisibleInstances.map((item) => (
                 <div className="detail-item" key={item.id}>
                   <div className="instance-head">
                     <div className="list-title">{t(lang, item.title)}</div>
@@ -318,7 +718,11 @@ export function WorkshopsPage() {
                 </div>
               ))}
               <div className="task-row">
-                <button className="route-btn active" type="button" onClick={() => navigate(dashboardRoutes.instances)}>
+                <button
+                  className="route-btn active"
+                  type="button"
+                  onClick={() => navigate(dashboardRoutes.instances)}
+                >
                   {t(lang, { zh: "进入实例页", en: "Open instances" })}
                 </button>
               </div>
@@ -343,26 +747,49 @@ export function WorkshopsPage() {
         ) : null}
         {filteredWorkshops.map((item) => {
           const service = visibleServices.find((entry) => entry.id === item.linkedService);
+          const itemFavorited = favoritedWorkshopIds.has(item.id);
+
           return (
             <article className="workshop-card" key={item.id}>
               <img className="cover" src={item.cover} alt={t(lang, item.title)} />
               <div className="pill-row">
                 <span className="pill active">{t(lang, item.badge)}</span>
                 <span className="pill">{t(lang, { zh: "可实例化", en: "Runnable" })}</span>
+                {itemFavorited ? (
+                  <span className="pill active">
+                    <svg className="icon inline-icon">
+                      <use href="#i-heart" />
+                    </svg>
+                    {t(lang, { zh: "已收藏", en: "Favorited" })}
+                  </span>
+                ) : null}
               </div>
               <h3 className="workshop-title">{t(lang, item.title)}</h3>
               <div className="meta">{t(lang, item.audience)}</div>
               <div className="section-note">{t(lang, item.summary)}</div>
               <div className="pill-row">
-                {item.tags.map((tag) => <span className="path-chip" key={tag}>{tag}</span>)}
+                {item.tags.map((tag) => (
+                  <span className="path-chip" key={tag}>
+                    {tag}
+                  </span>
+                ))}
               </div>
               <div className="section-note">{t(lang, item.next)}</div>
               <div className="task-row">
-                <button className="route-btn" type="button" onClick={() => navigate(dashboardRoutes.workshop(item.id))}>
+                <button
+                  className="route-btn"
+                  type="button"
+                  onClick={() => navigate(dashboardRoutes.workshop(item.id))}
+                >
                   {t(lang, { zh: "查看工坊", en: "View workshop" })}
                 </button>
+                {favoritesEnabled ? renderFavoriteButton(item.id, itemFavorited) : null}
                 {service ? (
-                  <button className="route-btn active" type="button" onClick={() => navigate(dashboardRoutes.service(service.id))}>
+                  <button
+                    className="route-btn active"
+                    type="button"
+                    onClick={() => navigate(dashboardRoutes.service(service.id))}
+                  >
                     {t(lang, { zh: "服务启动台", en: "Launchpad" })}
                   </button>
                 ) : null}
@@ -375,7 +802,12 @@ export function WorkshopsPage() {
       <details className="tech-details">
         <summary>{t(lang, { zh: "查看技术详情", en: "Show technical details" })}</summary>
         <div className="tech-body">
-          <div className="tech-note">{t(lang, { zh: "技术路径、工作区边界与跨端入口保留在折叠区，方便 creator 和重度用户查看。", en: "Technical routes, workspace boundaries, and cross-surface entry points live in this collapsed area for creators and power users." })}</div>
+          <div className="tech-note">
+            {t(lang, {
+              zh: "技术路径、工作区边界与跨端入口保留在折叠区，方便 creator 和重度用户查看。",
+              en: "Technical routes, workspace boundaries, and cross-surface entry points live in this collapsed area for creators and power users.",
+            })}
+          </div>
           <div className="tech-grid">
             <div className="tech-box">
               <h4>{t(lang, { zh: "当前工作区根路径", en: "Current workspace roots" })}</h4>
