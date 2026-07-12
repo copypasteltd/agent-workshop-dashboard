@@ -9,6 +9,8 @@ export const dashboardRoutes = {
   workshops: "/dashboard/workshops",
   workshop: (workshopId: string) => `/dashboard/workshops/${workshopId}`,
   service: (serviceId: string) => `/dashboard/services/${serviceId}`,
+  serviceBatch: (serviceId: string, batchJobId: string) =>
+    `/dashboard/services/${serviceId}/batches/${batchJobId}`,
   instances: "/dashboard/instances",
   instance: (instanceId: string, tab: InstanceTab = "overview") =>
     tab === "overview" ? `/dashboard/instances/${instanceId}` : `/dashboard/instances/${instanceId}/${tab}`,

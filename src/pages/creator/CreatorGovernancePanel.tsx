@@ -2855,10 +2855,6 @@ export function CreatorGovernancePanel({
     );
   }, [dynamicGovernanceSummary, query]);
 
-  const fallbackRows = useMemo(
-    () => meta.rows.filter((row) => matchesSearchQuery(query, rowSearchTexts(row))),
-    [meta.rows, query]
-  );
   const filteredQuotaPolicies = useMemo(
     () =>
       quotaPolicies.filter((policy) =>
@@ -2931,11 +2927,6 @@ export function CreatorGovernancePanel({
     l("执行说明", "Execution note"),
   ];
 
-  const isDynamicCredentials = authReady && section === "credentials";
-  const isDynamicMembers = authReady && section === "members";
-  const isDynamicPolicy = authReady && section === "policy";
-  const isDynamicGovernanceSummary =
-    authReady && (section === "audit" || section === "cost");
   const recentAuditExports = auditExportsQuery.data ?? [];
   const sharedDynamicError =
     membersQuery.error ||
@@ -2955,6 +2946,47 @@ export function CreatorGovernancePanel({
     billingEntriesQuery.error ||
     governanceSummaryQuery.error;
 
+  if (!authReady) {
+    return (
+      <div className="detail-body">
+        <div className="section-head">
+          <div>
+            <div className="eyebrow">{t(lang, { zh: "治理设置", en: "Governance" })}</div>
+            <div className="tab-title">{t(lang, meta.title)}</div>
+          </div>
+          <span className="pill active">{section}</span>
+        </div>
+        <div className="section-note">{t(lang, dynamicSummary)}</div>
+        <div className="composer-error">
+          {t(lang, {
+            zh: "当前治理分段只接受已认证工作区的权威后端数据。未登录或未恢复会话时，不再显示静态治理样例。",
+            en: "This governance segment accepts authoritative backend data from an authenticated workspace only. Static governance samples are no longer shown before sign-in or session recovery.",
+          })}
+        </div>
+        <div className="governance-stack">
+          <article className="detail-item governance-card">
+            <div className="card-row">
+              <div>
+                <div className="file-name">{t(lang, { zh: "当前上下文", en: "Current context" })}</div>
+                <div className="meta">{t(lang, workspaceLabel)}</div>
+              </div>
+              <span className="pill warn">{packageId}</span>
+            </div>
+            <div className="panel-empty">
+              {t(
+                lang,
+                l(
+                  "先恢复 Dashboard 登录态，再查看凭证、成员、MCP、审计和成本治理的正式对象。",
+                  "Restore the Dashboard session first, then reopen governance to inspect formal credentials, members, MCP policies, audit records, and cost controls."
+                )
+              )}
+            </div>
+          </article>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="detail-body">
       <div className="section-head">
@@ -2965,20 +2997,6 @@ export function CreatorGovernancePanel({
         <span className="pill active">{section}</span>
       </div>
       <div className="section-note">{t(lang, dynamicSummary)}</div>
-
-      {!authReady &&
-      (section === "credentials" ||
-        section === "members" ||
-        section === "policy" ||
-        section === "audit" ||
-        section === "cost") ? (
-        <div className="composer-error">
-          {t(lang, {
-            zh: "当前治理分段的真实数据依赖登录态和后端 API。未登录时只显示产品草案层的静态治理结构。",
-            en: "This governance segment depends on authenticated backend data. Without sign-in, only the product-spec fallback is shown.",
-          })}
-        </div>
-      ) : null}
 
       {sharedDynamicError &&
       (section === "credentials" ||
@@ -3121,7 +3139,7 @@ export function CreatorGovernancePanel({
         <>
           <GovernanceDataTable
             headers={credentialHeaders}
-            rows={isDynamicCredentials ? filteredCredentialRows : fallbackRows}
+            rows={filteredCredentialRows}
             emptyText={l(
               "当前工作区还没有凭证对象。可以先创建第一条治理记录。",
               "No credential records exist yet. Create the first governance record to continue."
@@ -3546,7 +3564,7 @@ export function CreatorGovernancePanel({
         <>
           <GovernanceDataTable
             headers={registryHeaders}
-            rows={isDynamicPolicy ? filteredRegistryRows : fallbackRows}
+            rows={filteredRegistryRows}
             emptyText={l(
               "当前工作区还没有注册外部连接器。可以先补一条第三方或工作区托管 MCP。",
               "No external connectors are registered yet. Add a third-party or workspace-managed MCP first."
@@ -3555,7 +3573,7 @@ export function CreatorGovernancePanel({
 
           <GovernanceDataTable
             headers={bindingHeaders}
-            rows={isDynamicPolicy ? filteredBindingRows : fallbackRows}
+            rows={filteredBindingRows}
             emptyText={l(
               "当前工作区还没有绑定策略。创建绑定后，实例启动时才会自动解析并挂接连接器。",
               "No binding policies exist yet. Create a binding so runs can resolve and attach connectors during boot."
@@ -3840,7 +3858,7 @@ export function CreatorGovernancePanel({
         <>
           <GovernanceDataTable
             headers={dynamicGovernanceSummary?.headers ?? meta.headers}
-            rows={isDynamicGovernanceSummary ? dynamicGovernanceRows : fallbackRows}
+            rows={dynamicGovernanceRows}
             emptyText={l(
               "当前成本治理视图还没有可展示的数据。",
               "No metering rows are available in the current cost governance view."
@@ -4389,7 +4407,7 @@ export function CreatorGovernancePanel({
         <>
           <GovernanceDataTable
             headers={memberHeaders}
-            rows={isDynamicMembers ? memberRows : fallbackRows}
+            rows={memberRows}
             emptyText={l(
               "当前工作区成员列表为空。请先创建正式成员关系，或切换到其他工作区。",
               "No workspace members are visible here yet. Create a formal membership first or switch to another workspace."
@@ -4432,7 +4450,7 @@ export function CreatorGovernancePanel({
                     )}
                   </div>
                 </div>
-                {isDynamicMembers && (membersQuery.isFetching || invitationsQuery.isFetching) ? (
+                {membersQuery.isFetching || invitationsQuery.isFetching ? (
                   <span className="pill active">{t(lang, { zh: "同步中", en: "Syncing" })}</span>
                 ) : null}
               </div>
@@ -4795,7 +4813,7 @@ export function CreatorGovernancePanel({
         <>
           <GovernanceDataTable
             headers={dynamicGovernanceSummary?.headers ?? meta.headers}
-            rows={isDynamicGovernanceSummary ? dynamicGovernanceRows : fallbackRows}
+            rows={dynamicGovernanceRows}
             emptyText={l(
               "当前治理分段没有匹配项。可以清空搜索词，或切换到其他治理分段。",
               "No rows match the current governance segment. Clear the query or switch to another governance section."
@@ -4910,7 +4928,7 @@ export function CreatorGovernancePanel({
       ) : (
         <GovernanceDataTable
           headers={dynamicGovernanceSummary?.headers ?? meta.headers}
-          rows={isDynamicGovernanceSummary ? dynamicGovernanceRows : fallbackRows}
+          rows={dynamicGovernanceRows}
           emptyText={l(
             "当前治理分段没有匹配项。可以清空搜索词，或切换到其他治理分段。",
             "No rows match the current governance segment. Clear the query or switch to another governance section."

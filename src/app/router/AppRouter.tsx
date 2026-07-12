@@ -87,9 +87,14 @@ export function AppRouter() {
         <Route path="/workshops" element={workshopsElement} />
         <Route path="/workshops/:workshopId" element={workshopsElement} />
         <Route path="/services/:serviceId" element={workshopsElement} />
+        <Route path="/services/:serviceId/batches/:batchJobId" element={workshopsElement} />
         <Route path={dashboardRoutes.workshops} element={workshopsElement} />
         <Route path="/dashboard/workshops/:workshopId" element={workshopsElement} />
         <Route path="/dashboard/services/:serviceId" element={workshopsElement} />
+        <Route
+          path="/dashboard/services/:serviceId/batches/:batchJobId"
+          element={workshopsElement}
+        />
         <Route path="/instances" element={instancesElement} />
         <Route path="/instances/:instanceId" element={instancesElement} />
         <Route path="/instances/:instanceId/:detailTab" element={instancesElement} />

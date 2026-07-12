@@ -11,13 +11,7 @@ import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { DashboardAuthScreen } from "../components/DashboardAuthScreen";
 import { IconSprite } from "../components/IconSprite";
-import {
-  creatorPackages,
-  dashboardAssets,
-  dashboardServices,
-  instances,
-  workshops,
-} from "../data/dashboardData";
+import { dashboardAssets } from "../data/dashboardData";
 import {
   dashboardAuthApi,
   dashboardCatalogApi,
@@ -80,25 +74,6 @@ type ShellSearchItem = {
   route: string;
 };
 
-function normalizePackageTone(
-  value: string
-): CreatorPackageSummary["tone"] {
-  if (value === "success" || value === "warn" || value === "active") {
-    return value;
-  }
-
-  return "active";
-}
-
-function mapStaticWorkshopRecord(item: (typeof workshops)[number]): ShellWorkshopRecord {
-  return {
-    id: item.id,
-    title: item.title,
-    summary: item.summary,
-    route: dashboardRoutes.workshop(item.id),
-  };
-}
-
 function mapCatalogWorkshopRecord(item: WorkshopCatalogEntry): ShellWorkshopRecord {
   return {
     id: item.workshopId,
@@ -108,32 +83,12 @@ function mapCatalogWorkshopRecord(item: WorkshopCatalogEntry): ShellWorkshopReco
   };
 }
 
-function mapStaticServiceRecord(item: (typeof dashboardServices)[number]): ShellServiceRecord {
-  return {
-    id: item.id,
-    name: item.name,
-    auth: item.auth,
-    route: dashboardRoutes.service(item.id),
-  };
-}
-
 function mapCatalogServiceRecord(item: ServiceCatalogEntry): ShellServiceRecord {
   return {
     id: item.serviceId,
     name: item.displayName,
     auth: item.authRequirementText,
     route: dashboardRoutes.service(item.serviceId),
-  };
-}
-
-function mapStaticPackageRecord(item: (typeof creatorPackages)[string]): ShellPackageRecord {
-  return {
-    id: item.id,
-    title: item.title,
-    source: item.source,
-    status: item.status,
-    statusClass: normalizePackageTone(item.statusClass),
-    route: dashboardRoutes.creatorPackage(item.id),
   };
 }
 
@@ -189,11 +144,11 @@ function buildDashboardSearchTypeLabel(
 ) {
   switch (resourceType) {
     case "workshop":
-      return t(lang, { zh: "宸ュ潑", en: "Workshop" });
+      return t(lang, { zh: "工坊", en: "Workshop" });
     case "service":
-      return t(lang, { zh: "鏈嶅姟", en: "Service" });
+      return t(lang, { zh: "服务", en: "Service" });
     case "run":
-      return t(lang, { zh: "瀹炰緥", en: "Instance" });
+      return t(lang, { zh: "实例", en: "Instance" });
     case "package":
       return t(lang, { zh: "Package", en: "Package" });
   }
@@ -259,13 +214,6 @@ export function DashboardShell() {
   const [accountOpen, setAccountOpen] = useState(false);
   const deferredGlobalSearchQuery = useDeferredValue(globalSearchQuery);
 
-  const workspaceOptions = useMemo(
-    () =>
-      listDashboardWorkspaceViews(
-        authMode === "required" ? authWorkspaces : undefined
-      ),
-    [authMode, authWorkspaces]
-  );
   const currentWorkspace = useMemo(
     () =>
       resolveDashboardWorkspaceView({
@@ -274,6 +222,15 @@ export function DashboardShell() {
         fallbackWorkspaceId: authCurrentWorkspace?.workspaceId,
       }),
     [authCurrentWorkspace?.workspaceId, authMode, authWorkspaces, currentWorkspaceId]
+  );
+  const workspaceOptions = useMemo(
+    () => {
+      const authViews = listDashboardWorkspaceViews(
+        authMode === "required" ? authWorkspaces : undefined
+      );
+      return authViews.length > 0 ? authViews : [currentWorkspace];
+    },
+    [authMode, authWorkspaces, currentWorkspace]
   );
   const creatorAccess = useMemo(
     () =>
@@ -285,7 +242,6 @@ export function DashboardShell() {
     [authMode, authenticated, currentWorkspace]
   );
   const dataQueriesEnabled = authMode !== "required" || authenticated;
-  const previewMode = authMode !== "required";
   const workshopsQuery = useQuery({
     queryKey: [
       "dashboard",
@@ -550,26 +506,14 @@ export function DashboardShell() {
 
   const visibleWorkshops = useMemo(
     () =>
-      workshopsQuery.isSuccess
-        ? workshopsQuery.data.map(mapCatalogWorkshopRecord)
-        : currentWorkspace.source === "auth"
-          ? []
-          : workshops
-              .filter((item) => currentWorkspace.workshopIds.includes(item.id))
-              .map(mapStaticWorkshopRecord),
-    [currentWorkspace, workshopsQuery.data, workshopsQuery.isSuccess]
+      workshopsQuery.isSuccess ? workshopsQuery.data.map(mapCatalogWorkshopRecord) : [],
+    [workshopsQuery.data, workshopsQuery.isSuccess]
   );
 
   const visibleServices = useMemo(
     () =>
-      servicesQuery.isSuccess
-        ? servicesQuery.data.map(mapCatalogServiceRecord)
-        : currentWorkspace.source === "auth"
-          ? []
-          : dashboardServices
-              .filter((item) => currentWorkspace.workshopIds.includes(item.workshopId))
-              .map(mapStaticServiceRecord),
-    [currentWorkspace, servicesQuery.data, servicesQuery.isSuccess]
+      servicesQuery.isSuccess ? servicesQuery.data.map(mapCatalogServiceRecord) : [],
+    [servicesQuery.data, servicesQuery.isSuccess]
   );
 
   const visibleInstances = useMemo(
@@ -578,9 +522,7 @@ export function DashboardShell() {
         ? runsQuery.data
             .map((snapshot) => mapRunSnapshotToInstanceRecord(snapshot, undefined, currentWorkspace))
             .filter((item) => item.workspaceId === currentWorkspace.id)
-        : currentWorkspace.source === "auth"
-          ? []
-          : Object.values(instances).filter((item) => item.workspaceId === currentWorkspace.id),
+        : [],
     [currentWorkspace, runsQuery.data, runsQuery.isSuccess]
   );
 
@@ -588,12 +530,8 @@ export function DashboardShell() {
     () =>
       !creatorAccess.canAccessCreator
         ? []
-        : previewMode
-          ? Object.values(creatorPackages)
-              .filter((item) => currentWorkspace.packageIds.includes(item.id))
-              .map(mapStaticPackageRecord)
-          : (packagesQuery.data ?? []).map(mapCreatorPackageRecord),
-    [creatorAccess.canAccessCreator, currentWorkspace, packagesQuery.data, previewMode]
+        : (packagesQuery.data ?? []).map(mapCreatorPackageRecord),
+    [creatorAccess.canAccessCreator, packagesQuery.data]
   );
 
   const view = useMemo<"workshops" | "instances" | "creator">(() => {
@@ -726,7 +664,6 @@ export function DashboardShell() {
   const shouldUseRemoteSearchResults =
     authMode === "required" &&
     authenticated &&
-    !previewMode &&
     trimmedGlobalSearchQuery.length > 0 &&
     trimmedGlobalSearchQuery === deferredTrimmedGlobalSearchQuery &&
     searchResultsQuery.isSuccess;
@@ -737,7 +674,6 @@ export function DashboardShell() {
   const searchResultsPending =
     authMode === "required" &&
     authenticated &&
-    !previewMode &&
     trimmedGlobalSearchQuery.length > 0 &&
     (trimmedGlobalSearchQuery !== deferredTrimmedGlobalSearchQuery ||
       searchResultsQuery.isLoading ||
@@ -1237,7 +1173,7 @@ export function DashboardShell() {
                           searchResultsPending ? (
                             <div className="panel-empty">
                               {t(lang, {
-                                zh: "姝ｅ湪鎼滅储褰撳墠宸ヤ綔鍖虹殑宸ュ潑銆佹湇鍔°€佸疄渚嬪拰 package銆?",
+                                zh: "正在搜索当前工作区的工坊、服务、实例和 package。",
                                 en: "Searching workshops, services, instances, and packages in the current workspace.",
                               })}
                             </div>

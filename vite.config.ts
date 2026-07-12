@@ -17,4 +17,33 @@ export default defineConfig({
       allow: [path.resolve(__dirname, "../..")],
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) {
+            return;
+          }
+
+          if (id.includes("react-router")) {
+            return "router-vendor";
+          }
+
+          if (id.includes("@tanstack/react-query") || id.includes("i18next") || id.includes("zustand")) {
+            return "state-vendor";
+          }
+
+          if (
+            id.includes(`${path.sep}react${path.sep}`) ||
+            id.includes(`${path.sep}react-dom${path.sep}`) ||
+            id.includes(`${path.sep}scheduler${path.sep}`)
+          ) {
+            return "react-vendor";
+          }
+
+          return "vendor";
+        },
+      },
+    },
+  },
 });

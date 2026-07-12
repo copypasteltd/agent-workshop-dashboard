@@ -20,6 +20,7 @@
       "@lingban/api-sdk": ["../../packages/api-sdk/src/index.ts"],
       "@lingban/contracts": ["../../packages/contracts/src/index.ts"],
       "@lingban/domain-models": ["../../packages/domain-models/src/index.ts"],
+      "@lingban/realtime": ["../../packages/realtime/src/index.ts"],
       "@lingban/ui-tokens": ["../../packages/ui-tokens/src/index.ts"]
     },
 

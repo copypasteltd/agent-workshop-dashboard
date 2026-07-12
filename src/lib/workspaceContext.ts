@@ -1,11 +1,12 @@
 import type { WorkspaceSummary } from "@lingban/contracts";
-import {
-  dashboardWorkspaces,
-  type DashboardWorkspace,
-} from "../data/dashboardData";
 import { l, type LocalizedString } from "./i18n";
 
-export type DashboardWorkspaceView = DashboardWorkspace & {
+export type DashboardWorkspaceView = {
+  id: string;
+  name: LocalizedString;
+  type: LocalizedString;
+  meta: LocalizedString;
+  root: string;
   contextKey: string;
   selectionId: string;
   runtimeWorkspaceId: string;
@@ -15,10 +16,6 @@ export type DashboardWorkspaceView = DashboardWorkspace & {
   membershipStatus: WorkspaceSummary["membershipStatus"] | null;
   authType: WorkspaceSummary["type"] | null;
 };
-
-const workspacePresetMap = new Map(
-  dashboardWorkspaces.map((workspace) => [workspace.id, workspace])
-);
 
 function normalizeText(value?: string | null) {
   return (value ?? "").trim().toLowerCase();
@@ -52,17 +49,41 @@ function workspaceRoleLabel(role: WorkspaceSummary["role"]): LocalizedString {
   }
 }
 
-function resolveWorkspacePreset(contextKey: string) {
-  return workspacePresetMap.get(contextKey) ?? null;
+function previewWorkspaceName(contextKey: string): LocalizedString {
+  switch (contextKey) {
+    case "personal":
+      return l("个人空间", "Personal Workspace");
+    case "harbor-finance":
+      return l("华港财务组", "Harbor Finance Team");
+    case "brand-lab":
+      return l("品牌内容组", "Brand Content Team");
+    default:
+      return l("预览工作区", "Preview Workspace");
+  }
 }
 
-function resolveWorkspaceRoot(workspace: WorkspaceSummary, preset?: DashboardWorkspace | null) {
+function previewWorkspaceType(contextKey: string) {
+  return contextKey === "personal"
+    ? workspaceTypeLabel("personal")
+    : workspaceTypeLabel("enterprise");
+}
+
+function previewWorkspaceMeta(): LocalizedString {
+  return l(
+    "预览工作区 / 登录后加载真实绑定",
+    "Preview workspace / Sign in to load live bindings"
+  );
+}
+
+function buildPreviewWorkspaceRoot(contextKey: string) {
+  const normalized =
+    normalizeText(contextKey).replace(/[^a-z0-9-]+/g, "-") || "preview";
+  return `/workspace/${normalized}/`;
+}
+
+function resolveWorkspaceRoot(workspace: WorkspaceSummary) {
   if (workspace.root) {
     return workspace.root;
-  }
-
-  if (preset?.root) {
-    return preset.root;
   }
 
   const normalizedSlug =
@@ -111,19 +132,24 @@ export function inferWorkspaceContextKey(input: {
   return "personal";
 }
 
-export function buildStaticDashboardWorkspaceView(
-  contextKey: string
+export function buildPreviewDashboardWorkspaceView(
+  selectionId?: string | null
 ): DashboardWorkspaceView {
-  const preset = resolveWorkspacePreset(contextKey);
-  if (!preset) {
-    throw new Error(`Unknown static dashboard workspace preset: ${contextKey}`);
-  }
-
+  const contextKey = inferWorkspaceContextKey({
+    workspaceId: selectionId,
+    slug: selectionId,
+    name: selectionId,
+  });
+  const effectiveSelectionId = selectionId?.trim() || contextKey;
   return {
-    ...preset,
-    contextKey: preset.id,
-    selectionId: preset.id,
-    runtimeWorkspaceId: preset.id,
+    id: contextKey,
+    name: previewWorkspaceName(contextKey),
+    type: previewWorkspaceType(contextKey),
+    meta: previewWorkspaceMeta(),
+    root: buildPreviewWorkspaceRoot(contextKey),
+    contextKey,
+    selectionId: effectiveSelectionId,
+    runtimeWorkspaceId: effectiveSelectionId,
     source: "static",
     slug: null,
     role: null,
@@ -136,34 +162,19 @@ export function buildDashboardWorkspaceViewFromAuth(
   workspace: WorkspaceSummary
 ): DashboardWorkspaceView {
   const contextKey = resolveAuthWorkspaceContextKey(workspace);
-  const preset = resolveWorkspacePreset(contextKey);
   const role = workspaceRoleLabel(workspace.role);
-  const meta = preset
-    ? l(
-        `${role.zh} / ${preset.meta.zh}`,
-        `${role.en} / ${preset.meta.en}`
-      )
-    : l(
-        `${role.zh} / ${workspace.slug || workspace.workspaceId}`,
-        `${role.en} / ${workspace.slug || workspace.workspaceId}`
-      );
+  const meta = l(
+    `${role.zh} / ${workspace.slug || workspace.workspaceId}`,
+    `${role.en} / ${workspace.slug || workspace.workspaceId}`
+  );
 
   return {
-    ...(preset ?? {
-      id: contextKey,
-      name: l(workspace.name, workspace.name),
-      type: workspaceTypeLabel(workspace.type),
-      meta,
-      root: resolveWorkspaceRoot(workspace, null),
-      workshopIds: [],
-      packageIds: [],
-    }),
     id: contextKey,
     contextKey,
     name: l(workspace.name, workspace.name),
     type: workspaceTypeLabel(workspace.type),
     meta,
-    root: resolveWorkspaceRoot(workspace, preset),
+    root: resolveWorkspaceRoot(workspace),
     selectionId: workspace.workspaceId,
     runtimeWorkspaceId: workspace.workspaceId,
     source: "auth",
@@ -179,9 +190,7 @@ export function listDashboardWorkspaceViews(workspaces?: WorkspaceSummary[]) {
     return workspaces.map(buildDashboardWorkspaceViewFromAuth);
   }
 
-  return dashboardWorkspaces.map((workspace) =>
-    buildStaticDashboardWorkspaceView(workspace.id)
-  );
+  return [];
 }
 
 export function resolveDashboardWorkspaceView(input: {
@@ -218,9 +227,7 @@ export function resolveDashboardWorkspaceView(input: {
     return buildDashboardWorkspaceViewFromAuth(workspaces[0]);
   }
 
-  if (selectionId && workspacePresetMap.has(selectionId)) {
-    return buildStaticDashboardWorkspaceView(selectionId);
-  }
-
-  return buildStaticDashboardWorkspaceView(dashboardWorkspaces[0].id);
+  return buildPreviewDashboardWorkspaceView(
+    selectionId ?? fallbackWorkspaceId ?? "harbor-finance"
+  );
 }

@@ -1,10 +1,14 @@
 import { uploadRunAttachment } from "@lingban/api-sdk";
+import type {
+  ApproveRunInput,
+  ReviewRunInformationAnswerDecision,
+  RunInformationCollection,
+} from "@lingban/contracts";
 import { matchesSearchQuery } from "@lingban/domain-models";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import type { InstanceRecord, InstanceTab } from "../../data/dashboardData";
-import { dashboardServices, instances } from "../../data/dashboardData";
 import { formatAttachmentSize, pickBrowserAttachments, type BrowserAttachmentDraft } from "../../lib/attachments";
 import {
   billingSourceLabel,
@@ -63,14 +67,6 @@ function toListViewStatusFilter(statusFilter: "all" | "active" | "warn" | "succe
   }
 }
 
-function inferInstanceService(instance: InstanceRecord) {
-  return (
-    dashboardServices.find(
-      (item) => item.linkedInstance === instance.id || instance.targetPath.startsWith(item.targetPath)
-    ) ?? null
-  );
-}
-
 function getInstanceUpdatedAt(instance: InstanceRecord) {
   return instance.messages.at(-1)?.time ?? "--:--";
 }
@@ -107,6 +103,18 @@ function formatBillingOccurredAt(lang: "zh" | "en", value: string | null) {
     minute: "2-digit",
     hour12: false,
   });
+}
+
+function approvalKindLabel(lang: "zh" | "en", value: string) {
+  switch (value) {
+    case "quota-override":
+      return t(lang, { zh: "配额审批", en: "Quota approval" });
+    case "mcp-access":
+      return t(lang, { zh: "MCP 访问审批", en: "MCP access approval" });
+    case "general":
+    default:
+      return t(lang, { zh: "普通审批", en: "General approval" });
+  }
 }
 
 function mcpCallStatusLabel(lang: "zh" | "en", value: string) {
@@ -181,6 +189,203 @@ function formatDataVolume(value: number | null) {
   }
 
   return `${value} B`;
+}
+
+function hasInformationCollectionData(
+  informationCollection: RunInformationCollection | null | undefined
+) {
+  if (!informationCollection) {
+    return false;
+  }
+
+  return (
+    informationCollection.requiredCount > 0 ||
+    informationCollection.satisfiedCount > 0 ||
+    informationCollection.missingCount > 0 ||
+    informationCollection.userMessageCount > 0 ||
+    informationCollection.attachmentCount > 0 ||
+    informationCollection.slotSchemaVersion !== null
+  );
+}
+
+function informationCollectionStatusLabel(
+  lang: "zh" | "en",
+  status: RunInformationCollection["status"]
+) {
+  switch (status) {
+    case "completed":
+      return t(lang, { zh: "已补齐", en: "Completed" });
+    case "in_progress":
+      return t(lang, { zh: "补充中", en: "In progress" });
+    case "pending":
+    default:
+      return t(lang, { zh: "待补充", en: "Pending" });
+  }
+}
+
+function informationCollectionSlotStatusLabel(
+  lang: "zh" | "en",
+  status: RunInformationCollection["slots"][number]["status"]
+) {
+  switch (status) {
+    case "satisfied":
+      return t(lang, { zh: "已满足", en: "Satisfied" });
+    case "missing":
+      return t(lang, { zh: "缺失", en: "Missing" });
+    case "optional":
+    default:
+      return t(lang, { zh: "可选", en: "Optional" });
+  }
+}
+
+function buildInformationCollectionItems(
+  lang: "zh" | "en",
+  informationCollection: RunInformationCollection
+) {
+  return [...informationCollection.slots]
+    .sort((left, right) => {
+      const leftRank =
+        left.status === "missing" && left.required ? 0 : left.status === "satisfied" ? 2 : 1;
+      const rightRank =
+        right.status === "missing" && right.required ? 0 : right.status === "satisfied" ? 2 : 1;
+      return leftRank - rightRank;
+    })
+    .slice(0, 4)
+    .map((slot) => {
+      const requirement = slot.required
+        ? t(lang, { zh: "必填", en: "Required" })
+        : t(lang, { zh: "可选", en: "Optional" });
+      const status = informationCollectionSlotStatusLabel(lang, slot.status);
+      const attachmentPart =
+        slot.attachmentCount > 0
+          ? t(lang, {
+              zh: `附件 ${slot.attachmentCount}`,
+              en: `${slot.attachmentCount} attachment${slot.attachmentCount === 1 ? "" : "s"}`,
+            })
+          : null;
+      const answerPart =
+        slot.answerCount > 0
+          ? t(lang, {
+              zh: `回答 ${slot.answerCount}`,
+              en: `${slot.answerCount} answer${slot.answerCount === 1 ? "" : "s"}`,
+            })
+          : null;
+      const detail =
+        slot.lastAnswerText?.trim() ||
+        slot.prompt?.trim() ||
+        slot.description?.trim();
+      return [slot.title, requirement, status, attachmentPart, answerPart, detail]
+        .filter((item): item is string => Boolean(item))
+        .join(" / ");
+    });
+}
+
+type InformationCollectionAnswer = RunInformationCollection["answers"][number];
+
+type ReviewableInformationAnswer = InformationCollectionAnswer & {
+  slotTitle: string;
+};
+
+type ReviewFormState = {
+  open: boolean;
+  note: string;
+  replacementValueText: string;
+  replacementAttachmentPath: string;
+  replacementAttachmentLabel: string;
+};
+
+function informationCollectionAnswerReviewStatusLabel(
+  lang: "zh" | "en",
+  status: InformationCollectionAnswer["reviewStatus"]
+) {
+  switch (status) {
+    case "approved":
+      return t(lang, { zh: "已批准", en: "Approved" });
+    case "rejected":
+      return t(lang, { zh: "已驳回", en: "Rejected" });
+    case "superseded":
+      return t(lang, { zh: "已替换", en: "Superseded" });
+    case "pending":
+    default:
+      return t(lang, { zh: "待复核", en: "Pending review" });
+  }
+}
+
+function informationCollectionAnswerReviewTone(status: InformationCollectionAnswer["reviewStatus"]) {
+  switch (status) {
+    case "approved":
+      return "success";
+    case "rejected":
+      return "warn";
+    case "superseded":
+      return "";
+    case "pending":
+    default:
+      return "active";
+  }
+}
+
+function informationCollectionAnswerSourceLabel(
+  lang: "zh" | "en",
+  source: InformationCollectionAnswer["source"]
+) {
+  switch (source) {
+    case "manual-review":
+      return t(lang, { zh: "人工复核", en: "Manual review" });
+    case "user-message":
+    default:
+      return t(lang, { zh: "用户消息", en: "User message" });
+  }
+}
+
+function informationCollectionAnswerPreview(
+  lang: "zh" | "en",
+  answer: InformationCollectionAnswer
+) {
+  if (answer.kind === "attachment") {
+    const attachmentLabel = answer.attachmentLabel?.trim();
+    const attachmentPath = answer.attachmentPath?.trim();
+    if (attachmentLabel && attachmentPath) {
+      return `${attachmentLabel} / ${attachmentPath}`;
+    }
+
+    return (
+      attachmentLabel ||
+      attachmentPath ||
+      t(lang, {
+        zh: "附件答案",
+        en: "Attachment answer",
+      })
+    );
+  }
+
+  return (
+    answer.valueText?.trim() ||
+    t(lang, {
+      zh: "空文本",
+      en: "Empty text",
+    })
+  );
+}
+
+function createDefaultReviewFormState(answer: InformationCollectionAnswer): ReviewFormState {
+  return {
+    open: false,
+    note: "",
+    replacementValueText: answer.valueText ?? "",
+    replacementAttachmentPath: answer.attachmentPath ?? "",
+    replacementAttachmentLabel: answer.attachmentLabel ?? "",
+  };
+}
+
+function createEmptyReviewFormState(): ReviewFormState {
+  return {
+    open: false,
+    note: "",
+    replacementValueText: "",
+    replacementAttachmentPath: "",
+    replacementAttachmentLabel: "",
+  };
 }
 
 function getInstanceTags(instance: InstanceRecord) {
@@ -270,6 +475,10 @@ function buildBreadcrumbs(path: string) {
   }
 
   return crumbs;
+}
+
+function toTestIdSegment(value: string) {
+  return value.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "item";
 }
 
 function InstanceTabPanel({ instance, liveMode }: { instance: InstanceRecord; liveMode: boolean }) {
@@ -431,7 +640,9 @@ function InstanceTabPanel({ instance, liveMode }: { instance: InstanceRecord; li
             <div className="eyebrow">{t(lang, { zh: "文件", en: "Files" })}</div>
             <div className="tab-title">{t(lang, { zh: "当前路径", en: "Current path" })}</div>
           </div>
-          <span className="pill active">{currentPath}</span>
+          <span className="pill active" data-testid="dashboard-instance-files-current-path">
+            {currentPath}
+          </span>
         </div>
         <div className="pill-row crumb-row">
           {breadcrumbs.map((crumb) => (
@@ -491,6 +702,7 @@ function InstanceTabPanel({ instance, liveMode }: { instance: InstanceRecord; li
           <input
             className="search-inline-input"
             type="text"
+            data-testid="dashboard-instance-files-search"
             value={fileSearch}
             onChange={(event) => setFileSearch(event.target.value)}
             placeholder={t(lang, {
@@ -509,6 +721,7 @@ function InstanceTabPanel({ instance, liveMode }: { instance: InstanceRecord; li
           visibleFiles.map((item) => (
             <button
               className={`file-select ${selectedFile?.path === item.path ? "active" : ""}`}
+              data-testid={`dashboard-instance-file-select-${toTestIdSegment(item.name)}`}
               key={item.path}
               type="button"
               onClick={() => setSelectedFilePath(item.path)}
@@ -553,7 +766,7 @@ function InstanceTabPanel({ instance, liveMode }: { instance: InstanceRecord; li
           </div>
         ) : null}
         {selectedFile ? (
-          <div className="preview-panel">
+          <div className="preview-panel" data-testid="dashboard-instance-file-preview">
             <div className="section-head">
               <div>
                 <div className="eyebrow">{t(lang, { zh: "文件预览", en: "File Preview" })}</div>
@@ -564,6 +777,7 @@ function InstanceTabPanel({ instance, liveMode }: { instance: InstanceRecord; li
                 {liveMode ? (
                   <button
                     className="route-btn active"
+                    data-testid="dashboard-instance-file-download"
                     type="button"
                     disabled={downloadingPath === selectedFile.path}
                     onClick={async () => {
@@ -1088,14 +1302,6 @@ export function InstancesPage() {
     refetchInterval: 10_000,
   });
 
-  const staticWorkspaceInstances = useMemo(() => {
-    return Object.fromEntries(
-      Object.values(instances)
-        .filter((item) => item.workspaceId === currentWorkspace.id)
-        .map((item) => [item.id, item])
-    ) as Record<string, InstanceRecord>;
-  }, [currentWorkspace.id]);
-
   const liveInstances = useMemo(() => {
     const list = runsQuery.data ?? [];
     const mapped = list
@@ -1139,24 +1345,20 @@ export function InstancesPage() {
   const instanceDataMode =
     (runsSummaryQuery.data?.total ?? 0) > 0 || Object.keys(liveInstances).length > 0 || Boolean(detailedLiveInstance)
       ? "live"
-      : currentWorkspace.source === "auth"
-        ? "empty"
-        : "static";
+      : "empty";
 
   const mergedInstances = useMemo(() => {
     const next: Record<string, InstanceRecord> =
       instanceDataMode === "live"
         ? { ...liveInstances }
-        : instanceDataMode === "static"
-          ? { ...staticWorkspaceInstances }
-          : {};
+        : {};
 
     if (detailedLiveInstance) {
       next[detailedLiveInstance.id] = detailedLiveInstance;
     }
 
     return next;
-  }, [detailedLiveInstance, instanceDataMode, liveInstances, staticWorkspaceInstances]);
+  }, [detailedLiveInstance, instanceDataMode, liveInstances]);
 
   const sortedInstances = useMemo(() => {
     const all = Object.values(mergedInstances);
@@ -1177,47 +1379,8 @@ export function InstancesPage() {
       return filteredLiveInstances;
     }
 
-    return sortedInstances.filter((item) => {
-      const attention = getInstanceAttention(item);
-      const tags = getInstanceTags(item);
-      const service = inferInstanceService(item);
-      const statusMatched = statusFilter === "all" || item.statusClass === statusFilter;
-      const modeMatched =
-        listMode === "all"
-          ? true
-          : listMode === "todo"
-            ? attention.needsApproval
-            : listMode === "running"
-              ? item.statusClass === "active"
-              : attention.resultReady;
-      const tagMatched = tagFilter === "all" || tags.includes(tagFilter);
-
-      if (!statusMatched || !modeMatched || !tagMatched) {
-        return false;
-      }
-
-      return matchesSearchQuery(searchQuery, [
-        item.id,
-        item.route,
-        item.targetPath,
-        item.title.zh,
-        item.title.en,
-        item.workshop.zh,
-        item.workshop.en,
-        item.workspace.zh,
-        item.workspace.en,
-        item.status.zh,
-        item.status.en,
-        service?.name.zh,
-        service?.name.en,
-        item.summary.zh,
-        item.summary.en,
-        item.nextAction.zh,
-        item.nextAction.en,
-        ...tags,
-      ]);
-    });
-  }, [filteredLiveInstances, instanceDataMode, listMode, searchQuery, sortedInstances, statusFilter, tagFilter]);
+    return [];
+  }, [filteredLiveInstances, instanceDataMode]);
 
   const availableTags = useMemo(() => {
     if (runsSummaryQuery.data) {
@@ -1302,7 +1465,6 @@ export function InstancesPage() {
     }
   }, [detailTab, instanceId, setInstanceTab]);
 
-  const fallbackStaticInstance = Object.values(staticWorkspaceInstances)[0] ?? null;
   const routeInstance = instanceId ? mergedInstances[instanceId] ?? null : null;
   const routeInstanceOutOfScope = Boolean(instanceId) && routeInstance == null;
   const instance =
@@ -1310,10 +1472,9 @@ export function InstancesPage() {
     (!instanceId
       ? sortedInstances.find((item) => item.id === activeInstanceId) ??
         sortedInstances[0] ??
-        fallbackStaticInstance
+        null
       : null);
   const liveMode = Boolean(instance && isLiveRunId(instance.id));
-  const sampleMode = Boolean(instance && !liveMode);
   useDashboardRecentRecorder(
     instance && liveMode && currentWorkspace.source === "auth"
       ? {
@@ -1330,8 +1491,69 @@ export function InstancesPage() {
     Record<string, BrowserAttachmentDraft[]>
   >({});
   const [composerError, setComposerError] = useState("");
+  const [reviewError, setReviewError] = useState("");
+  const [reviewFormsByAnswerId, setReviewFormsByAnswerId] = useState<
+    Record<string, ReviewFormState>
+  >({});
   const draft = instance ? instanceDrafts[instance.id] ?? "" : "";
   const attachmentDrafts = instance ? attachmentDraftsByInstance[instance.id] ?? [] : [];
+  const liveSnapshot =
+    liveMode && liveRunDetailQuery.data?.run.runId === instance?.id
+      ? liveRunDetailQuery.data
+      : null;
+  const informationCollection = liveSnapshot?.informationCollection ?? null;
+  const informationCollectionVisible = useMemo(
+    () => hasInformationCollectionData(informationCollection),
+    [informationCollection]
+  );
+  const informationCollectionItems = useMemo(
+    () =>
+      informationCollection
+        ? buildInformationCollectionItems(lang, informationCollection)
+        : [],
+    [informationCollection, lang]
+  );
+  const reviewableInformationAnswers = useMemo<ReviewableInformationAnswer[]>(
+    () =>
+      informationCollection
+        ? [...informationCollection.answers]
+            .filter((answer) => answer.reviewStatus !== "superseded")
+            .map((answer) => ({
+              ...answer,
+              slotTitle:
+                informationCollection.slots.find((slot) => slot.key === answer.slotKey)?.title ??
+                answer.slotKey,
+            }))
+            .sort((left, right) => {
+              const rank = (status: ReviewableInformationAnswer["reviewStatus"]) => {
+                switch (status) {
+                  case "pending":
+                    return 0;
+                  case "rejected":
+                    return 1;
+                  case "approved":
+                    return 2;
+                  case "superseded":
+                  default:
+                    return 3;
+                }
+              };
+
+              const rankDiff = rank(left.reviewStatus) - rank(right.reviewStatus);
+              if (rankDiff !== 0) {
+                return rankDiff;
+              }
+
+              return right.createdAt.localeCompare(left.createdAt);
+            })
+        : [],
+    [informationCollection]
+  );
+  const pendingApprovals = useMemo(
+    () => liveSnapshot?.approvals.filter((item) => item.state === "pending") ?? [],
+    [liveSnapshot]
+  );
+  const pendingApproval = pendingApprovals[0] ?? null;
 
   const setInstanceAttachments = (instanceId: string, next: BrowserAttachmentDraft[]) => {
     setAttachmentDraftsByInstance((current) => ({
@@ -1348,12 +1570,215 @@ export function InstancesPage() {
     });
   };
 
+  const updateReviewForm = (
+    answerId: string,
+    updater: (current: ReviewFormState) => ReviewFormState
+  ) => {
+    setReviewFormsByAnswerId((current) => {
+      const nextCurrent = current[answerId] ?? createEmptyReviewFormState();
+      return {
+        ...current,
+        [answerId]: updater(nextCurrent),
+      };
+    });
+  };
+
+  const openReviewForm = (answer: ReviewableInformationAnswer) => {
+    setReviewError("");
+    setReviewFormsByAnswerId((current) => ({
+      ...current,
+      [answer.answerId]: {
+        ...(current[answer.answerId] ?? createDefaultReviewFormState(answer)),
+        open: true,
+      },
+    }));
+  };
+
+  const closeReviewForm = (answer: ReviewableInformationAnswer) => {
+    setReviewFormsByAnswerId((current) => ({
+      ...current,
+      [answer.answerId]: {
+        ...(current[answer.answerId] ?? createDefaultReviewFormState(answer)),
+        open: false,
+      },
+    }));
+  };
+
   useEffect(() => {
     setComposerError("");
+    setReviewError("");
+    setReviewFormsByAnswerId({});
   }, [instance?.id]);
 
+  const approvalMutation = useMutation({
+    mutationFn: async (input: ApproveRunInput) => {
+      if (!instance) {
+        throw new Error(
+          t(lang, {
+            zh: "当前工作区没有可用实例。",
+            en: "There is no available run in the current workspace.",
+          })
+        );
+      }
+
+      if (liveMode && runStream.connected) {
+        await runStream.approveAwaitAck(input);
+        return null;
+      }
+
+      return await dashboardRunsApi.approveRun(instance.id, input);
+    },
+    onSuccess: async (snapshot) => {
+      if (instance && snapshot) {
+        queryClient.setQueryData(["dashboard", "runs", instance.id], snapshot);
+        queryClient.setQueryData(["dashboard", "runs", instance.id, "files"], snapshot.files);
+      }
+
+      setComposerError("");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "billing"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "me", "recent"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "notifications"] }),
+      ]);
+    },
+    onError: (error) => {
+      setComposerError(
+        error instanceof Error
+          ? error.message
+          : t(lang, { zh: "审批失败，请稍后重试。", en: "Approval failed. Please try again." })
+      );
+    },
+  });
+
+  const reviewMutation = useMutation({
+    mutationFn: async (input: {
+      answer: ReviewableInformationAnswer;
+      decision: ReviewRunInformationAnswerDecision;
+      note?: string;
+      replacementValueText?: string;
+      replacementAttachmentPath?: string;
+      replacementAttachmentLabel?: string;
+    }) => {
+      if (!instance) {
+        throw new Error(
+          t(lang, {
+            zh: "当前工作区没有可用实例。",
+            en: "There is no available run in the current workspace.",
+          })
+        );
+      }
+
+      return await dashboardRunsApi.reviewRunInformationAnswer(instance.id, {
+        answerId: input.answer.answerId,
+        decision: input.decision,
+        note: input.note?.trim() || undefined,
+        replacementValueText: input.replacementValueText?.trim() || undefined,
+        replacementAttachmentPath: input.replacementAttachmentPath?.trim() || undefined,
+        replacementAttachmentLabel: input.replacementAttachmentLabel?.trim() || undefined,
+      });
+    },
+    onSuccess: async (snapshot, variables) => {
+      if (instance) {
+        queryClient.setQueryData(["dashboard", "runs", instance.id], snapshot);
+        queryClient.setQueryData(["dashboard", "runs", instance.id, "files"], snapshot.files);
+      }
+
+      setReviewError("");
+      setReviewFormsByAnswerId((current) => {
+        const next = { ...current };
+        delete next[variables.answer.answerId];
+        return next;
+      });
+
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "runs", instance?.id] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "runs", instance?.id, "files"] }),
+      ]);
+    },
+    onError: (error) => {
+      setReviewError(
+        error instanceof Error
+          ? error.message
+          : t(lang, {
+              zh: "复核提交失败，请稍后重试。",
+              en: "Review submission failed. Please try again.",
+            })
+      );
+    },
+  });
+
+  const handleApprovalDecision = (approved: boolean) => {
+    if (!pendingApproval) {
+      return;
+    }
+
+    setComposerError("");
+    approvalMutation.mutate({
+      approvalId: pendingApproval.approvalId,
+      approved,
+      note: approved
+        ? "Approved from the dashboard conversation."
+        : "Rejected from the dashboard conversation.",
+    });
+  };
+
+  const handleQuickReviewDecision = (
+    answer: ReviewableInformationAnswer,
+    decision: Exclude<ReviewRunInformationAnswerDecision, "revise">
+  ) => {
+    setReviewError("");
+    reviewMutation.mutate({
+      answer,
+      decision,
+      note:
+        decision === "approve"
+          ? "Approved from the dashboard review panel."
+          : "Rejected from the dashboard review panel.",
+    });
+  };
+
+  const handleRevisionSubmit = (answer: ReviewableInformationAnswer) => {
+    const form = reviewFormsByAnswerId[answer.answerId] ?? createDefaultReviewFormState(answer);
+
+    if (answer.kind === "text" && !form.replacementValueText.trim()) {
+      setReviewError(
+        t(lang, {
+          zh: "文本答案改写必须填写替换内容。",
+          en: "Text answer revisions require replacement content.",
+        })
+      );
+      return;
+    }
+
+    if (answer.kind === "attachment" && !form.replacementAttachmentPath.trim()) {
+      setReviewError(
+        t(lang, {
+          zh: "附件答案改写必须填写新的文件路径。",
+          en: "Attachment answer revisions require a replacement file path.",
+        })
+      );
+      return;
+    }
+
+    setReviewError("");
+    reviewMutation.mutate({
+      answer,
+      decision: "revise",
+      note: form.note,
+      replacementValueText: form.replacementValueText,
+      replacementAttachmentPath: form.replacementAttachmentPath,
+      replacementAttachmentLabel: form.replacementAttachmentLabel,
+    });
+  };
+
   const sendMessageMutation = useMutation({
-    mutationFn: async (input: { text: string; drafts: BrowserAttachmentDraft[] }) => {
+    mutationFn: async (input: {
+      instanceId: string;
+      text: string;
+      drafts: BrowserAttachmentDraft[];
+    }) => {
       if (!instance) {
         throw new Error(
           t(lang, { zh: "当前工作区没有可用实例。", en: "There is no available run in the current workspace." })
@@ -1378,26 +1803,39 @@ export function InstancesPage() {
           en: "I added attachments. Please read them and continue.",
         }),
         attachments,
+        slotValues: [],
       };
 
-      if (liveMode && runStream.sendMessage(payload)) {
-        return null;
+      if (liveMode && runStream.connected) {
+        await runStream.sendMessageAwaitAck(payload);
+        return {
+          mode: "ws" as const,
+          snapshot: null,
+        };
       }
 
-      return await dashboardRunsApi.sendRunMessage(instance.id, payload);
+      return {
+        mode: "http" as const,
+        snapshot: await dashboardRunsApi.sendRunMessage(instance.id, payload),
+      };
     },
-    onSuccess: async () => {
-      if (!instance) {
-        return;
+    onSuccess: async (result, variables) => {
+      if (result.mode === "http" && result.snapshot) {
+        queryClient.setQueryData(["dashboard", "runs", variables.instanceId], result.snapshot);
+        queryClient.setQueryData(["dashboard", "runs", variables.instanceId, "files"], result.snapshot.files);
       }
 
-      clearInstanceDraft(instance.id);
-      clearInstanceAttachments(instance.id);
+      const currentDraft =
+        useDashboardUiStore.getState().instanceDrafts[variables.instanceId] ?? "";
+      if (currentDraft === variables.text || (!currentDraft.trim() && !variables.text.trim())) {
+        clearInstanceDraft(variables.instanceId);
+      }
+      clearInstanceAttachments(variables.instanceId);
       setComposerError("");
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["dashboard", "runs"] }),
-        queryClient.invalidateQueries({ queryKey: ["dashboard", "runs", instance.id] }),
-        queryClient.invalidateQueries({ queryKey: ["dashboard", "runs", instance.id, "files"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "runs", variables.instanceId] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "runs", variables.instanceId, "files"] }),
         queryClient.invalidateQueries({ queryKey: ["dashboard", "billing"] }),
         queryClient.invalidateQueries({ queryKey: ["dashboard", "me", "recent"] }),
       ]);
@@ -1505,14 +1943,6 @@ export function InstancesPage() {
             })}
           </div>
         ) : null}
-        {instanceDataMode === "static" ? (
-          <div className="section-note">
-            {t(lang, {
-              zh: "当前工作区尚未检测到真实 run 列表，实例面板正在展示样例实例结构。真实实例建立后，列表会自动切换到 live 数据主链。",
-              en: "No live run list was detected for the current workspace yet. The instance surface is showing sample structures and will switch to the live data chain automatically once real runs appear.",
-            })}
-          </div>
-        ) : null}
         {instanceDataMode === "empty" ? (
           <div className="section-note">
             {t(lang, {
@@ -1546,7 +1976,6 @@ export function InstancesPage() {
                 <span className="list-count">{String(group.items.length).padStart(2, "0")}</span>
               </div>
               {group.items.map((item) => {
-                const service = inferInstanceService(item);
                 const unreadCount = getUnreadCount(item);
                 const tags = getInstanceTags(item);
                 const attention = getInstanceAttention(item);
@@ -1567,7 +1996,7 @@ export function InstancesPage() {
                         </div>
                       </div>
                       <div className="instance-card-meta">
-                        <div className="meta">{t(lang, service?.name ?? item.workshop)}</div>
+                        <div className="meta">{t(lang, item.workshop)}</div>
                         <div className="meta">{`${t(lang, item.workspace)} / ${getInstanceUpdatedAt(item)}`}</div>
                       </div>
                       <div className="section-note">{t(lang, item.summary)}</div>
@@ -1611,9 +2040,6 @@ export function InstancesPage() {
                   <div className="pill-row">
                     <span className={`pill ${instance.statusClass}`}>{t(lang, instance.status)}</span>
                     <span className="pill active">{t(lang, instance.workspace)}</span>
-                    {sampleMode ? (
-                      <span className="pill warn">{t(lang, { zh: "样例实例", en: "Sample run" })}</span>
-                    ) : null}
                   </div>
                 </div>
               </summary>
@@ -1631,6 +2057,50 @@ export function InstancesPage() {
                     </div>
                   ))}
                 </div>
+                {liveMode && informationCollectionVisible && informationCollection ? (
+                  <div
+                    className="detail-item"
+                    data-testid="dashboard-instance-information-collection-summary"
+                  >
+                    <div className="instance-head">
+                      <div className="file-name">
+                        {t(lang, { zh: "信息采集", en: "Input collection" })}
+                      </div>
+                      <span
+                        className={`pill ${
+                          informationCollection.status === "completed"
+                            ? "success"
+                            : informationCollection.status === "in_progress"
+                              ? "active"
+                              : "warn"
+                        }`}
+                      >
+                        {informationCollectionStatusLabel(lang, informationCollection.status)}
+                      </span>
+                    </div>
+                    <div className="meta">{informationCollection.prompt}</div>
+                    <div className="pill-row">
+                      <span className="path-chip active">
+                        {t(lang, {
+                          zh: `必填 ${informationCollection.requiredCount}`,
+                          en: `Required ${informationCollection.requiredCount}`,
+                        })}
+                      </span>
+                      <span className="path-chip">
+                        {t(lang, {
+                          zh: `已满足 ${informationCollection.satisfiedCount}`,
+                          en: `Satisfied ${informationCollection.satisfiedCount}`,
+                        })}
+                      </span>
+                      <span className="path-chip warn">
+                        {t(lang, {
+                          zh: `缺失 ${informationCollection.missingCount}`,
+                          en: `Missing ${informationCollection.missingCount}`,
+                        })}
+                      </span>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </details>
           ) : (
@@ -1660,6 +2130,372 @@ export function InstancesPage() {
           )}
 
           <div className="thread">
+            {liveMode && informationCollectionVisible && informationCollection ? (
+              <article
+                className="message-card system"
+                data-testid="dashboard-instance-information-collection"
+              >
+                <div className="message-head">
+                  <div className="message-title">
+                    {t(lang, { zh: "输入采集进度", en: "Input collection progress" })}
+                  </div>
+                  <div className="pill-row">
+                    <span
+                      className={`pill ${
+                        informationCollection.status === "completed"
+                          ? "success"
+                          : informationCollection.status === "in_progress"
+                            ? "active"
+                            : "warn"
+                      }`}
+                    >
+                      {informationCollectionStatusLabel(lang, informationCollection.status)}
+                    </span>
+                    <span className="pill">
+                      {t(lang, {
+                        zh: `附件 ${informationCollection.attachmentCount}`,
+                        en: `Attachments ${informationCollection.attachmentCount}`,
+                      })}
+                    </span>
+                  </div>
+                </div>
+                <div className="message-body">{informationCollection.prompt}</div>
+                {informationCollectionItems.length > 0 ? (
+                  <div className="message-attachment-list">
+                    {informationCollectionItems.map((item) => (
+                      <div className="message-attachment-chip" key={item}>
+                        <div className="message-attachment-label">{item}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {reviewableInformationAnswers.length > 0 ? (
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: "12px",
+                      marginTop: "12px",
+                    }}
+                  >
+                    <div className="pill-row">
+                      <span
+                        className={`pill ${
+                          informationCollection.pendingReviewCount > 0 ? "warn" : ""
+                        }`}
+                        data-testid="dashboard-instance-review-count-pending"
+                      >
+                        {t(lang, {
+                          zh: `待复核 ${informationCollection.pendingReviewCount}`,
+                          en: `Pending ${informationCollection.pendingReviewCount}`,
+                        })}
+                      </span>
+                      <span
+                        className="pill"
+                        data-testid="dashboard-instance-review-count-approved"
+                      >
+                        {t(lang, {
+                          zh: `已批准 ${informationCollection.approvedReviewCount}`,
+                          en: `Approved ${informationCollection.approvedReviewCount}`,
+                        })}
+                      </span>
+                      <span
+                        className={`pill ${
+                          informationCollection.rejectedReviewCount > 0 ? "warn" : ""
+                        }`}
+                        data-testid="dashboard-instance-review-count-rejected"
+                      >
+                        {t(lang, {
+                          zh: `已驳回 ${informationCollection.rejectedReviewCount}`,
+                          en: `Rejected ${informationCollection.rejectedReviewCount}`,
+                        })}
+                      </span>
+                    </div>
+                    {reviewError ? <div className="composer-error">{reviewError}</div> : null}
+                    {reviewableInformationAnswers.slice(0, 6).map((answer) => {
+                      const form =
+                        reviewFormsByAnswerId[answer.answerId] ??
+                        createDefaultReviewFormState(answer);
+                      const preview = informationCollectionAnswerPreview(lang, answer);
+                      return (
+                        <div
+                          key={answer.answerId}
+                          data-testid={`dashboard-instance-review-answer-${answer.answerId}`}
+                          style={{
+                            border: "1px solid var(--line)",
+                            borderRadius: "14px",
+                            background: "var(--surface-3)",
+                            padding: "12px",
+                            display: "grid",
+                            gap: "10px",
+                          }}
+                        >
+                          <div className="message-head">
+                            <div className="message-title">{answer.slotTitle}</div>
+                            <div className="pill-row">
+                              <span
+                                className={`pill ${informationCollectionAnswerReviewTone(answer.reviewStatus)}`}
+                              >
+                                {informationCollectionAnswerReviewStatusLabel(
+                                  lang,
+                                  answer.reviewStatus
+                                )}
+                              </span>
+                              <span className="pill">
+                                {informationCollectionAnswerSourceLabel(lang, answer.source)}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="meta">{preview}</div>
+                          {answer.reviewNote ? (
+                            <div className="section-note">
+                              {t(lang, { zh: "上一条复核备注", en: "Latest review note" })}:{" "}
+                              {answer.reviewNote}
+                            </div>
+                          ) : null}
+                          <div className="pill-row">
+                            <button
+                              className="route-btn active"
+                              data-testid={`dashboard-instance-review-approve-${answer.answerId}`}
+                              type="button"
+                              disabled={reviewMutation.isPending}
+                              onClick={() => handleQuickReviewDecision(answer, "approve")}
+                            >
+                              {t(lang, { zh: "批准", en: "Approve" })}
+                            </button>
+                            <button
+                              className="path-chip warn"
+                              data-testid={`dashboard-instance-review-reject-${answer.answerId}`}
+                              type="button"
+                              disabled={reviewMutation.isPending}
+                              onClick={() => handleQuickReviewDecision(answer, "reject")}
+                            >
+                              {t(lang, { zh: "驳回", en: "Reject" })}
+                            </button>
+                            <button
+                              className="path-chip"
+                              data-testid={`dashboard-instance-review-revise-${answer.answerId}`}
+                              type="button"
+                              disabled={reviewMutation.isPending}
+                              onClick={() =>
+                                form.open ? closeReviewForm(answer) : openReviewForm(answer)
+                              }
+                            >
+                              {form.open
+                                ? t(lang, { zh: "收起改写", en: "Hide revision" })
+                                : t(lang, { zh: "改写并替换", en: "Revise and replace" })}
+                            </button>
+                          </div>
+                          {form.open ? (
+                            <div style={{ display: "grid", gap: "8px" }}>
+                              {answer.kind === "text" ? (
+                                <textarea
+                                  className="composer-box composer-input"
+                                  data-testid={`dashboard-instance-review-text-${answer.answerId}`}
+                                  value={form.replacementValueText}
+                                  onChange={(event) =>
+                                    updateReviewForm(answer.answerId, (current) => ({
+                                      ...current,
+                                      replacementValueText: event.target.value,
+                                    }))
+                                  }
+                                  placeholder={t(lang, {
+                                    zh: "输入新的文本答案",
+                                    en: "Enter the replacement text answer",
+                                  })}
+                                  style={{ minHeight: "96px" }}
+                                />
+                              ) : (
+                                <>
+                                  <label className="fake-input">
+                                    <input
+                                      className="search-inline-input"
+                                      data-testid={`dashboard-instance-review-path-${answer.answerId}`}
+                                      type="text"
+                                      value={form.replacementAttachmentPath}
+                                      onChange={(event) =>
+                                        updateReviewForm(answer.answerId, (current) => ({
+                                          ...current,
+                                          replacementAttachmentPath: event.target.value,
+                                        }))
+                                      }
+                                      placeholder={t(lang, {
+                                        zh: "输入新的附件路径",
+                                        en: "Enter the replacement attachment path",
+                                      })}
+                                    />
+                                  </label>
+                                  <label className="fake-input">
+                                    <input
+                                      className="search-inline-input"
+                                      type="text"
+                                      value={form.replacementAttachmentLabel}
+                                      onChange={(event) =>
+                                        updateReviewForm(answer.answerId, (current) => ({
+                                          ...current,
+                                          replacementAttachmentLabel: event.target.value,
+                                        }))
+                                      }
+                                      placeholder={t(lang, {
+                                        zh: "输入新的附件标签（可选）",
+                                        en: "Enter the replacement attachment label (optional)",
+                                      })}
+                                    />
+                                  </label>
+                                </>
+                              )}
+                              <label className="fake-input">
+                                <input
+                                  className="search-inline-input"
+                                  type="text"
+                                  value={form.note}
+                                  onChange={(event) =>
+                                    updateReviewForm(answer.answerId, (current) => ({
+                                      ...current,
+                                      note: event.target.value,
+                                    }))
+                                  }
+                                  placeholder={t(lang, {
+                                    zh: "填写复核备注（可选）",
+                                    en: "Add a review note (optional)",
+                                  })}
+                                />
+                              </label>
+                              <div className="pill-row">
+                                <button
+                                  className="route-btn active"
+                                  data-testid={`dashboard-instance-review-submit-${answer.answerId}`}
+                                  type="button"
+                                  disabled={reviewMutation.isPending}
+                                  onClick={() => handleRevisionSubmit(answer)}
+                                >
+                                  {reviewMutation.isPending
+                                    ? t(lang, { zh: "提交中", en: "Submitting" })
+                                    : t(lang, { zh: "提交改写", en: "Submit revision" })}
+                                </button>
+                                <button
+                                  className="path-chip"
+                                  type="button"
+                                  disabled={reviewMutation.isPending}
+                                  onClick={() => closeReviewForm(answer)}
+                                >
+                                  {t(lang, { zh: "取消", en: "Cancel" })}
+                                </button>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                <div className="pill-row">
+                  <button
+                    className="route-btn active"
+                    type="button"
+                    onClick={() =>
+                      setInstanceDraft(
+                        instance.id,
+                        t(lang, {
+                          zh: "请逐项告诉我当前还缺哪些信息，并按顺序引导我补齐。",
+                          en: "Please tell me which inputs are still missing and guide me through them one by one.",
+                        })
+                      )
+                    }
+                  >
+                    {t(lang, { zh: "查看缺口", en: "List missing inputs" })}
+                  </button>
+                  <button
+                    className="path-chip"
+                    type="button"
+                    onClick={() => setInstanceDraft(instance.id, informationCollection.prompt)}
+                  >
+                    {t(lang, { zh: "继续引导", en: "Continue guided intake" })}
+                  </button>
+                </div>
+              </article>
+            ) : null}
+            {liveMode && pendingApproval ? (
+              <article
+                className="message-card system approval-inline-card"
+                data-testid="dashboard-instance-pending-approval"
+              >
+                <div className="message-head">
+                  <div className="message-title">
+                    {t(lang, { zh: "待处理审批", en: "Pending approval" })}
+                  </div>
+                  <div className="pill-row">
+                    <span
+                      className={`pill ${
+                        pendingApproval.kind === "quota-override" ? "warn" : "active"
+                      }`}
+                    >
+                      {approvalKindLabel(lang, pendingApproval.kind)}
+                    </span>
+                    {pendingApprovals.length > 1 ? (
+                      <span className="pill">
+                        {t(lang, {
+                          zh: `其余 ${pendingApprovals.length - 1} 项`,
+                          en: `${pendingApprovals.length - 1} more`,
+                        })}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="message-body">{pendingApproval.prompt}</div>
+                {pendingApproval.note ? (
+                  <div className="meta approval-inline-note">{pendingApproval.note}</div>
+                ) : null}
+                <div className="pill-row">
+                  {pendingApproval.relatedResourceRef ? (
+                    <span className="path-chip">{pendingApproval.relatedResourceRef}</span>
+                  ) : null}
+                  <span className="path-chip">
+                    {t(lang, {
+                      zh: `发起于 ${formatBillingOccurredAt(lang, pendingApproval.requestedAt)}`,
+                      en: `Requested ${formatBillingOccurredAt(lang, pendingApproval.requestedAt)}`,
+                    })}
+                  </span>
+                </div>
+                <div className="approval-action-row">
+                  <button
+                    className="route-btn active"
+                    data-testid="dashboard-instance-approve-button"
+                    type="button"
+                    disabled={approvalMutation.isPending}
+                    onClick={() => handleApprovalDecision(true)}
+                  >
+                    {approvalMutation.isPending
+                      ? t(lang, { zh: "提交中", en: "Submitting" })
+                      : t(lang, { zh: "批准", en: "Approve" })}
+                  </button>
+                  <button
+                    className="path-chip warn"
+                    data-testid="dashboard-instance-reject-button"
+                    type="button"
+                    disabled={approvalMutation.isPending}
+                    onClick={() => handleApprovalDecision(false)}
+                  >
+                    {t(lang, { zh: "驳回", en: "Reject" })}
+                  </button>
+                  <button
+                    className="path-chip"
+                    data-testid="dashboard-instance-ask-approval"
+                    type="button"
+                    onClick={() =>
+                      setInstanceDraft(
+                        instance.id,
+                        t(lang, {
+                          zh: "请先解释这个审批请求的影响范围、执行对象和后续动作，我再决定是否批准。",
+                          en: "Please explain the approval scope, execution target, and downstream action before I decide.",
+                        })
+                      )
+                    }
+                  >
+                    {t(lang, { zh: "询问 Codex", en: "Ask Codex" })}
+                  </button>
+                </div>
+              </article>
+            ) : null}
             {instance ? instance.messages.map((message, index) => (
               <article className={`message-card ${message.kind}`} key={`${message.time}-${index}`}>
                 <div className="message-head">
@@ -1698,6 +2534,7 @@ export function InstancesPage() {
               <>
                 <textarea
                   className="composer-box composer-input"
+                  data-testid="dashboard-instance-composer-input"
                   value={draft}
                   onChange={(event) => setInstanceDraft(instance.id, event.target.value)}
                   placeholder={t(lang, {
@@ -1707,9 +2544,13 @@ export function InstancesPage() {
                 />
                 {composerError ? <div className="composer-error">{composerError}</div> : null}
                 {attachmentDrafts.length > 0 ? (
-                  <div className="attachment-draft-list">
+                  <div className="attachment-draft-list" data-testid="dashboard-instance-attachment-drafts">
                     {attachmentDrafts.map((attachment) => (
-                      <div className="attachment-draft-card" key={attachment.id}>
+                      <div
+                        className="attachment-draft-card"
+                        data-testid={`dashboard-instance-attachment-draft-${attachment.id}`}
+                        key={attachment.id}
+                      >
                         <div>
                           <div className="attachment-draft-title">{attachment.label}</div>
                           <div className="attachment-draft-meta">
@@ -1719,6 +2560,7 @@ export function InstancesPage() {
                         </div>
                         <button
                           className="path-chip warn"
+                          data-testid={`dashboard-instance-attachment-remove-${attachment.id}`}
                           type="button"
                           onClick={() =>
                             setInstanceAttachments(
@@ -1737,6 +2579,7 @@ export function InstancesPage() {
                   <span className="path-chip">{t(lang, { zh: "追问结果", en: "Ask about results" })}</span>
                   <button
                     className="path-chip"
+                    data-testid="dashboard-instance-add-attachments"
                     type="button"
                     disabled={sendMessageMutation.isPending}
                     onClick={async () => {
@@ -1779,6 +2622,7 @@ export function InstancesPage() {
                   </button>
                   <button
                     className="route-btn active"
+                    data-testid="dashboard-instance-send-button"
                     type="button"
                     disabled={
                       sendMessageMutation.isPending ||
@@ -1790,6 +2634,7 @@ export function InstancesPage() {
                       }
                       setComposerError("");
                       sendMessageMutation.mutate({
+                        instanceId: instance.id,
                         text: draft,
                         drafts: attachmentDrafts,
                       });

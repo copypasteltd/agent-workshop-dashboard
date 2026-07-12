@@ -1,11 +1,21 @@
-import type { ServiceCatalogEntry, WorkshopCatalogEntry } from "@lingban/contracts";
+import type {
+  BatchRunDraftItemInput,
+  BatchRunImportFieldMapping,
+  ImportBatchRunFileResponse,
+  ServiceCatalogEntry,
+  WorkshopCatalogEntry,
+} from "@lingban/contracts";
 import { matchesSearchQuery } from "@lingban/domain-models";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
-import { dashboardCatalogApi, dashboardMeApi, dashboardRunsApi } from "../../lib/api";
 import {
-  instances,
+  dashboardBatchRunsApi,
+  dashboardCatalogApi,
+  dashboardMeApi,
+  dashboardRunsApi,
+} from "../../lib/api";
+import {
   type DashboardService,
   type Workshop,
 } from "../../data/dashboardData";
@@ -21,6 +31,212 @@ type FavoriteWorkshopMutationInput = {
   workshopId: string;
   favorited: boolean;
 };
+
+type BatchDraftRow = {
+  rowId: string;
+  title: string;
+  pathSuffix: string;
+  initialMessage: string;
+  contextText: string;
+};
+
+type BatchImportFieldKey = "title" | "pathSuffix" | "targetPath" | "initialMessage" | "rowKey";
+
+type BatchImportMappingDraft = Record<BatchImportFieldKey, string> & {
+  ignoreColumns: string[];
+};
+
+type BatchGovernanceDraft = {
+  maxParallelRuns: string;
+  budgetLimit: string;
+  retryLimit: string;
+};
+
+type BatchGovernanceInput = {
+  maxParallelRuns: number;
+  budgetLimit: number | null;
+  retryLimit: number;
+};
+
+type BatchRunDraftSubmission = {
+  targetServiceId: string;
+  title?: string;
+  items: BatchRunDraftItemInput[];
+  governance: BatchGovernanceInput;
+};
+
+type BatchRunEstimateRequest = BatchRunDraftSubmission & {
+  signature: string;
+};
+
+const batchImportFieldKeys: BatchImportFieldKey[] = [
+  "title",
+  "pathSuffix",
+  "targetPath",
+  "initialMessage",
+  "rowKey",
+];
+
+let batchDraftRowSequence = 1;
+
+function nextBatchDraftRowId() {
+  const current = batchDraftRowSequence;
+  batchDraftRowSequence += 1;
+  return `batch_row_${current}`;
+}
+
+function createBatchDraftRow(seed?: Partial<Omit<BatchDraftRow, "rowId">>): BatchDraftRow {
+  return {
+    rowId: nextBatchDraftRowId(),
+    title: seed?.title ?? "",
+    pathSuffix: seed?.pathSuffix ?? "",
+    initialMessage: seed?.initialMessage ?? "",
+    contextText: seed?.contextText ?? "",
+  };
+}
+
+function parseBatchContextText(input: string) {
+  return input
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .reduce<Record<string, string>>((accumulator, line) => {
+      const separatorIndex = line.includes(":") ? line.indexOf(":") : line.indexOf("=");
+      if (separatorIndex <= 0) {
+        return accumulator;
+      }
+
+      const key = line.slice(0, separatorIndex).trim();
+      const value = line.slice(separatorIndex + 1).trim();
+      if (!key || !value) {
+        return accumulator;
+      }
+
+      accumulator[key] = value;
+      return accumulator;
+    }, {});
+}
+
+function serializeBatchContext(context: Record<string, string>) {
+  return Object.entries(context)
+    .map(([key, value]) => `${key}: ${value}`)
+    .join("\n");
+}
+
+function mapImportedBatchDraftRow(item: BatchRunDraftItemInput): BatchDraftRow {
+  return {
+    rowId: nextBatchDraftRowId(),
+    title: item.title,
+    pathSuffix: item.pathSuffix ?? "",
+    initialMessage: item.initialMessage ?? "",
+    contextText: serializeBatchContext(item.context ?? {}),
+  };
+}
+
+function createBatchImportMappingDraft(
+  seed?: Partial<ImportBatchRunFileResponse["effectiveMapping"]>
+): BatchImportMappingDraft {
+  return {
+    title: seed?.title ?? "",
+    pathSuffix: seed?.pathSuffix ?? "",
+    targetPath: seed?.targetPath ?? "",
+    initialMessage: seed?.initialMessage ?? "",
+    rowKey: seed?.rowKey ?? "",
+    ignoreColumns: Array.from(new Set(seed?.ignoreColumns ?? [])),
+  };
+}
+
+function buildBatchImportMappingInput(draft: BatchImportMappingDraft): BatchRunImportFieldMapping {
+  const mapping: BatchRunImportFieldMapping = {
+    ignoreColumns: Array.from(new Set(draft.ignoreColumns)),
+  };
+
+  if (draft.title.trim()) {
+    mapping.title = draft.title.trim();
+  }
+  if (draft.pathSuffix.trim()) {
+    mapping.pathSuffix = draft.pathSuffix.trim();
+  }
+  if (draft.targetPath.trim()) {
+    mapping.targetPath = draft.targetPath.trim();
+  }
+  if (draft.initialMessage.trim()) {
+    mapping.initialMessage = draft.initialMessage.trim();
+  }
+  if (draft.rowKey.trim()) {
+    mapping.rowKey = draft.rowKey.trim();
+  }
+
+  return mapping;
+}
+
+function createBatchGovernanceDraft(
+  seed?: Partial<BatchGovernanceInput | { maxParallelRuns: string; budgetLimit: string; retryLimit: string }>
+): BatchGovernanceDraft {
+  return {
+    maxParallelRuns:
+      typeof seed?.maxParallelRuns === "number"
+        ? String(seed.maxParallelRuns)
+        : seed?.maxParallelRuns?.trim() || "3",
+    budgetLimit:
+      typeof seed?.budgetLimit === "number"
+        ? String(seed.budgetLimit)
+        : seed?.budgetLimit?.trim() || "",
+    retryLimit:
+      typeof seed?.retryLimit === "number"
+        ? String(seed.retryLimit)
+        : seed?.retryLimit?.trim() || "0",
+  };
+}
+
+function formatNumericRange(low: number, high: number, digits = 1) {
+  return low === high ? low.toFixed(digits) : `${low.toFixed(digits)} - ${high.toFixed(digits)}`;
+}
+
+function formatUsdAmount(value: number | null | undefined) {
+  return value == null ? "-" : `$${value.toFixed(2)}`;
+}
+
+function formatUsdRange(low: number, high: number) {
+  return low === high ? formatUsdAmount(low) : `${formatUsdAmount(low)} - ${formatUsdAmount(high)}`;
+}
+
+function inferBatchImportFormat(fileName: string) {
+  const normalized = fileName.toLowerCase();
+  if (normalized.endsWith(".csv")) {
+    return "csv" as const;
+  }
+  if (normalized.endsWith(".xlsx") || normalized.endsWith(".xlsm") || normalized.endsWith(".xls")) {
+    return "xlsx" as const;
+  }
+  return undefined;
+}
+
+function readFileAsBase64(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result !== "string") {
+        reject(new Error("Failed to read batch import file."));
+        return;
+      }
+
+      const contentBase64 = reader.result.includes(",")
+        ? reader.result.slice(reader.result.indexOf(",") + 1)
+        : reader.result;
+      if (!contentBase64) {
+        reject(new Error("Batch import file was empty."));
+        return;
+      }
+
+      resolve(contentBase64);
+    };
+    reader.onerror = () => {
+      reject(reader.error ?? new Error("Failed to read batch import file."));
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 function mapCatalogWorkshopToDashboardWorkshop(item: WorkshopCatalogEntry): Workshop {
   return {
@@ -54,12 +270,33 @@ function mapCatalogServiceToDashboardService(item: ServiceCatalogEntry): Dashboa
 export function WorkshopsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { workshopId, serviceId } = useParams();
+  const { workshopId, serviceId, batchJobId } = useParams();
   const lang = useDashboardUiStore((state) => state.lang);
   const [searchQuery, setSearchQuery] = useState("");
   const [scopeFilter, setScopeFilter] = useState<"all" | "enterprise" | "content" | "creative">(
     "all"
   );
+  const [batchTitleDraft, setBatchTitleDraft] = useState("");
+  const [batchGovernanceDraft, setBatchGovernanceDraft] = useState<BatchGovernanceDraft>(() =>
+    createBatchGovernanceDraft()
+  );
+  const [batchImportFile, setBatchImportFile] = useState<File | null>(null);
+  const [batchImportSheetName, setBatchImportSheetName] = useState("");
+  const [batchImportMappingDraft, setBatchImportMappingDraft] = useState<BatchImportMappingDraft>(
+    () => createBatchImportMappingDraft()
+  );
+  const [batchDraftRows, setBatchDraftRows] = useState<BatchDraftRow[]>([
+    createBatchDraftRow({
+      title: "Poster A",
+      pathSuffix: "poster-a",
+      contextText: "region: hk\nformat: portrait",
+    }),
+    createBatchDraftRow({
+      title: "Poster B",
+      pathSuffix: "poster-b",
+      contextText: "region: sg\nformat: square",
+    }),
+  ]);
   const currentWorkspaceId = useDashboardUiStore((state) => state.currentWorkspaceId);
   const authMode = useDashboardAuthStore((state) => state.authMode);
   const authenticated = useDashboardAuthStore((state) => state.authenticated);
@@ -120,6 +357,71 @@ export function WorkshopsPage() {
     retry: false,
     refetchInterval: 10_000,
   });
+  const batchRunsQuery = useQuery({
+    queryKey: [
+      "dashboard",
+      "batch-runs",
+      currentWorkspace.selectionId,
+      currentWorkspace.id,
+      serviceId ?? null,
+    ],
+    queryFn: async () => {
+      if (!serviceId) {
+        return [];
+      }
+
+      try {
+        return await dashboardBatchRunsApi.listBatchRuns({
+          workspaceContextKey: currentWorkspace.id,
+          serviceId,
+        });
+      } catch {
+        return [];
+      }
+    },
+    enabled: Boolean(serviceId),
+    retry: false,
+    refetchInterval: 10_000,
+  });
+  const batchDetailQuery = useQuery({
+    queryKey: [
+      "dashboard",
+      "batch-run",
+      currentWorkspace.selectionId,
+      currentWorkspace.id,
+      batchJobId ?? null,
+    ],
+    queryFn: async () => {
+      if (!batchJobId) {
+        return null;
+      }
+
+      return dashboardBatchRunsApi.getBatchRun(batchJobId);
+    },
+    enabled: Boolean(batchJobId),
+    retry: false,
+    refetchInterval: 10_000,
+  });
+  const batchItemsQuery = useQuery({
+    queryKey: [
+      "dashboard",
+      "batch-run",
+      "items",
+      currentWorkspace.selectionId,
+      currentWorkspace.id,
+      batchJobId ?? null,
+    ],
+    queryFn: async () => {
+      if (!batchJobId) {
+        return null;
+      }
+
+      return dashboardBatchRunsApi.listBatchItems(batchJobId);
+    },
+    enabled: Boolean(batchJobId),
+    retry: false,
+    refetchInterval: 10_000,
+  });
   const favoriteWorkshopsQuery = useQuery({
     queryKey: ["dashboard", "me", "favorites", currentWorkspace.selectionId, currentWorkspace.id],
     queryFn: async () => dashboardMeApi.listFavoriteWorkshops({ limit: 50 }),
@@ -158,6 +460,118 @@ export function WorkshopsPage() {
       ]);
     },
   });
+  const createBatchRunMutation = useMutation({
+    mutationFn: async (input: BatchRunDraftSubmission) =>
+      dashboardBatchRunsApi.createBatchRun({
+        workspaceContextKey: currentWorkspace.id,
+        workspaceId:
+          currentWorkspace.source === "auth"
+            ? currentWorkspace.runtimeWorkspaceId
+            : undefined,
+        serviceId: input.targetServiceId,
+        entrySurface: "dashboard",
+        title: input.title,
+        items: input.items,
+        governance: input.governance,
+      }),
+    onSuccess: async (created, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "batch-runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "runs"] }),
+      ]);
+      navigate(dashboardRoutes.serviceBatch(variables.targetServiceId, created.job.batchJobId));
+    },
+  });
+  const estimateBatchRunMutation = useMutation({
+    mutationFn: async (input: BatchRunEstimateRequest) =>
+      dashboardBatchRunsApi.estimateBatchRun({
+        workspaceContextKey: currentWorkspace.id,
+        workspaceId:
+          currentWorkspace.source === "auth"
+            ? currentWorkspace.runtimeWorkspaceId
+            : undefined,
+        serviceId: input.targetServiceId,
+        entrySurface: "dashboard",
+        items: input.items,
+        governance: input.governance,
+      }),
+  });
+  const validateBatchRunMutation = useMutation({
+    mutationFn: async (targetBatchJobId: string) =>
+      dashboardBatchRunsApi.validateBatchRun(targetBatchJobId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "batch-runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "batch-run"] }),
+      ]);
+    },
+  });
+  const startBatchRunMutation = useMutation({
+    mutationFn: async (targetBatchJobId: string) =>
+      dashboardBatchRunsApi.startBatchRun(targetBatchJobId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "batch-runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "batch-run"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "runs"] }),
+      ]);
+    },
+  });
+  const retryBatchRunMutation = useMutation({
+    mutationFn: async (targetBatchJobId: string) =>
+      dashboardBatchRunsApi.retryBatchRun(targetBatchJobId, {
+        onlyFailed: true,
+      }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "batch-runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "batch-run"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "runs"] }),
+      ]);
+    },
+  });
+  const cancelBatchRunMutation = useMutation({
+    mutationFn: async (targetBatchJobId: string) =>
+      dashboardBatchRunsApi.cancelBatchRun(targetBatchJobId, {
+        reason: "dashboard operator cancelled remaining items",
+      }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "batch-runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "batch-run"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "runs"] }),
+      ]);
+    },
+  });
+  const importBatchRunFileMutation = useMutation({
+    mutationFn: async (input: {
+      file: File;
+      mapping?: BatchRunImportFieldMapping;
+      sheetName?: string;
+    }) => {
+      const { file, mapping, sheetName } = input;
+      const contentBase64 = await readFileAsBase64(file);
+      return dashboardBatchRunsApi.importBatchRunFile({
+        workspaceContextKey: currentWorkspace.id,
+        workspaceId:
+          currentWorkspace.source === "auth"
+            ? currentWorkspace.runtimeWorkspaceId
+            : undefined,
+        fileName: file.name,
+        contentBase64,
+        format: inferBatchImportFormat(file.name),
+        sheetName: sheetName?.trim() || undefined,
+        mapping: mapping ?? buildBatchImportMappingInput(batchImportMappingDraft),
+      });
+    },
+    onSuccess: (imported) => {
+      setBatchImportSheetName(imported.activeSheetName ?? "");
+      setBatchImportMappingDraft(createBatchImportMappingDraft(imported.effectiveMapping));
+      if (imported.items.length > 0) {
+        setBatchDraftRows(imported.items.map(mapImportedBatchDraftRow));
+      }
+    },
+  });
   const favoriteWorkshopMutation = useMutation({
     mutationFn: async (input: FavoriteWorkshopMutationInput) =>
       dashboardMeApi.setFavoriteWorkshop(input.workshopId, {
@@ -187,9 +601,7 @@ export function WorkshopsPage() {
         ? runsQuery.data
             .map((snapshot) => mapRunSnapshotToInstanceRecord(snapshot, undefined, currentWorkspace))
             .filter((item) => item.workspaceId === currentWorkspace.id)
-        : currentWorkspace.source === "auth"
-          ? []
-          : Object.values(instances).filter((item) => item.workspaceId === currentWorkspace.id),
+        : [],
     [currentWorkspace, runsQuery.data, runsQuery.isSuccess]
   );
 
@@ -284,6 +696,219 @@ export function WorkshopsPage() {
     (selectedWorkshop
       ? visibleServices.find((item) => item.id === selectedWorkshop.linkedService) ?? null
       : null);
+  const selectedBatch = batchDetailQuery.data;
+  const selectedBatchItems = batchItemsQuery.data?.items ?? [];
+  const recentBatchRuns = batchRunsQuery.data ?? [];
+  const importedBatchPreview = importBatchRunFileMutation.data;
+  const batchImportDetectedColumns = useMemo(
+    () => importedBatchPreview?.detectedColumns ?? [],
+    [importedBatchPreview]
+  );
+  const batchImportMappedColumns = useMemo(
+    () =>
+      batchImportFieldKeys
+        .map((fieldKey) => batchImportMappingDraft[fieldKey].trim())
+        .filter((value): value is string => value.length > 0),
+    [batchImportMappingDraft]
+  );
+  const batchImportIgnoredColumns = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          batchImportMappingDraft.ignoreColumns.filter((column) =>
+            batchImportDetectedColumns.includes(column)
+          )
+        )
+      ),
+    [batchImportDetectedColumns, batchImportMappingDraft.ignoreColumns]
+  );
+  const batchImportContextColumns = useMemo(() => {
+    const reserved = new Set([...batchImportMappedColumns, ...batchImportIgnoredColumns]);
+    return batchImportDetectedColumns.filter((column) => !reserved.has(column));
+  }, [batchImportDetectedColumns, batchImportIgnoredColumns, batchImportMappedColumns]);
+  const batchImportDuplicateColumns = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const column of batchImportMappedColumns) {
+      counts.set(column, (counts.get(column) ?? 0) + 1);
+    }
+    return Array.from(counts.entries())
+      .filter(([, count]) => count > 1)
+      .map(([column]) => column);
+  }, [batchImportMappedColumns]);
+  const normalizedBatchDraftRows = useMemo(
+    () =>
+      batchDraftRows.map((row) => ({
+        rowId: row.rowId,
+        title: row.title.trim(),
+        pathSuffix: row.pathSuffix.trim(),
+        initialMessage: row.initialMessage.trim(),
+        context: parseBatchContextText(row.contextText),
+      })),
+    [batchDraftRows]
+  );
+  const batchDraftItems = useMemo<BatchRunDraftItemInput[]>(
+    () =>
+      normalizedBatchDraftRows.map((row) => ({
+        rowKey: null,
+        title: row.title,
+        targetPath: null,
+        pathSuffix: row.pathSuffix || null,
+        initialMessage: row.initialMessage || null,
+        context: row.context,
+      })),
+    [normalizedBatchDraftRows]
+  );
+  const batchDraftValidationErrors = useMemo(() => {
+    const errors: string[] = [];
+    const missingTitleRows = normalizedBatchDraftRows
+      .map((row, index) => (!row.title ? index + 1 : null))
+      .filter((value): value is number => value != null);
+
+    if (missingTitleRows.length > 0) {
+      errors.push(
+        t(lang, {
+          zh: `请补齐第 ${missingTitleRows.join("、")} 行的标题后再估算或创建批次。`,
+          en: `Add titles to row ${missingTitleRows.join(", ")} before estimating or creating the batch.`,
+        })
+      );
+    }
+
+    const pathSuffixCounts = new Map<string, number>();
+    for (const row of normalizedBatchDraftRows) {
+      if (!row.pathSuffix) {
+        continue;
+      }
+      pathSuffixCounts.set(row.pathSuffix, (pathSuffixCounts.get(row.pathSuffix) ?? 0) + 1);
+    }
+    const duplicatedPathSuffixes = Array.from(pathSuffixCounts.entries())
+      .filter(([, count]) => count > 1)
+      .map(([suffix]) => suffix);
+
+    if (duplicatedPathSuffixes.length > 0) {
+      errors.push(
+        t(lang, {
+          zh: `路径后缀必须唯一，当前重复项：${duplicatedPathSuffixes.join(", ")}。`,
+          en: `Path suffixes must be unique. Duplicate values: ${duplicatedPathSuffixes.join(", ")}.`,
+        })
+      );
+    }
+
+    return errors;
+  }, [lang, normalizedBatchDraftRows]);
+  const batchGovernanceValidation = useMemo(() => {
+    const errors: string[] = [];
+
+    const maxParallelRaw = batchGovernanceDraft.maxParallelRuns.trim();
+    const retryLimitRaw = batchGovernanceDraft.retryLimit.trim();
+    const budgetLimitRaw = batchGovernanceDraft.budgetLimit.trim();
+
+    let maxParallelRuns = Number.NaN;
+    let retryLimit = Number.NaN;
+    let budgetLimit: number | null = null;
+
+    if (!maxParallelRaw) {
+      errors.push(
+        t(lang, {
+          zh: "请填写并发上限。",
+          en: "Set a max concurrency value.",
+        })
+      );
+    } else {
+      maxParallelRuns = Number(maxParallelRaw);
+      if (!Number.isInteger(maxParallelRuns) || maxParallelRuns < 1 || maxParallelRuns > 50) {
+        errors.push(
+          t(lang, {
+            zh: "并发上限必须是 1 到 50 之间的整数。",
+            en: "Max concurrency must be an integer between 1 and 50.",
+          })
+        );
+      }
+    }
+
+    if (!retryLimitRaw) {
+      errors.push(
+        t(lang, {
+          zh: "请填写失败重试次数。",
+          en: "Set a retry limit.",
+        })
+      );
+    } else {
+      retryLimit = Number(retryLimitRaw);
+      if (!Number.isInteger(retryLimit) || retryLimit < 0 || retryLimit > 10) {
+        errors.push(
+          t(lang, {
+            zh: "失败重试次数必须是 0 到 10 之间的整数。",
+            en: "Retry limit must be an integer between 0 and 10.",
+          })
+        );
+      }
+    }
+
+    if (budgetLimitRaw) {
+      const parsedBudgetLimit = Number(budgetLimitRaw);
+      if (!Number.isFinite(parsedBudgetLimit) || parsedBudgetLimit < 0) {
+        errors.push(
+          t(lang, {
+            zh: "预算上限必须为空或大于等于 0。",
+            en: "Budget limit must be blank or a non-negative number.",
+          })
+        );
+      } else {
+        budgetLimit = parsedBudgetLimit;
+      }
+    }
+
+    return {
+      governance:
+        errors.length === 0
+          ? {
+              maxParallelRuns,
+              budgetLimit,
+              retryLimit,
+            }
+          : null,
+      errors,
+    };
+  }, [batchGovernanceDraft.budgetLimit, batchGovernanceDraft.maxParallelRuns, batchGovernanceDraft.retryLimit, lang]);
+  const batchLaunchValidationErrors = useMemo(
+    () => [...batchDraftValidationErrors, ...batchGovernanceValidation.errors],
+    [batchDraftValidationErrors, batchGovernanceValidation.errors]
+  );
+  const batchEstimatePayload = useMemo<BatchRunEstimateRequest | null>(() => {
+    if (!selectedService || !batchGovernanceValidation.governance || batchLaunchValidationErrors.length > 0) {
+      return null;
+    }
+
+    return {
+      signature: JSON.stringify({
+        workspaceId: currentWorkspace.runtimeWorkspaceId ?? null,
+        workspaceContextKey: currentWorkspace.id,
+        serviceId: selectedService.id,
+        items: batchDraftItems,
+        governance: batchGovernanceValidation.governance,
+      }),
+      targetServiceId: selectedService.id,
+      items: batchDraftItems,
+      governance: batchGovernanceValidation.governance,
+      title: batchTitleDraft.trim() || undefined,
+    };
+  }, [
+    batchDraftItems,
+    batchGovernanceValidation.governance,
+    batchLaunchValidationErrors.length,
+    batchTitleDraft,
+    currentWorkspace.id,
+    currentWorkspace.runtimeWorkspaceId,
+    selectedService,
+  ]);
+  const batchEstimateIsStale =
+    estimateBatchRunMutation.data != null &&
+    batchEstimatePayload != null &&
+    estimateBatchRunMutation.variables?.signature !== batchEstimatePayload.signature;
+  const canCreateBatchDraft =
+    selectedService != null &&
+    batchGovernanceValidation.governance != null &&
+    batchLaunchValidationErrors.length === 0;
   const selectedWorkshopFavorited = selectedWorkshop
     ? favoritedWorkshopIds.has(selectedWorkshop.id)
     : false;
@@ -346,6 +971,81 @@ export function WorkshopsPage() {
             ? t(lang, { zh: "已收藏", en: "Favorited" })
             : t(lang, { zh: "收藏工坊", en: "Favorite workshop" })}
       </button>
+    );
+  };
+
+  const batchImportFieldUsedByOtherMapping = (
+    currentField: BatchImportFieldKey,
+    column: string
+  ) =>
+    batchImportFieldKeys.some(
+      (fieldKey) => fieldKey !== currentField && batchImportMappingDraft[fieldKey] === column
+    );
+
+  const setBatchImportField = (fieldKey: BatchImportFieldKey, value: string) => {
+    setBatchImportMappingDraft((current) => ({
+      ...current,
+      ignoreColumns: current.ignoreColumns.filter((column) => column !== value),
+      [fieldKey]: value,
+    }));
+  };
+
+  const toggleBatchImportIgnoredColumn = (column: string) => {
+    setBatchImportMappingDraft((current) => {
+      const ignoreColumns = current.ignoreColumns.includes(column)
+        ? current.ignoreColumns.filter((item) => item !== column)
+        : [...current.ignoreColumns, column];
+      const next: BatchImportMappingDraft = {
+        ...current,
+        ignoreColumns,
+      };
+
+      for (const fieldKey of batchImportFieldKeys) {
+        if (next[fieldKey] === column) {
+          next[fieldKey] = "";
+        }
+      }
+
+      return next;
+    });
+  };
+
+  const runBatchImport = async (
+    overrides?: Partial<{
+      mapping: BatchRunImportFieldMapping;
+      sheetName: string;
+    }>
+  ) => {
+    if (!batchImportFile) {
+      return;
+    }
+
+    try {
+      await importBatchRunFileMutation.mutateAsync({
+        file: batchImportFile,
+        mapping: overrides?.mapping,
+        sheetName: overrides?.sheetName,
+      });
+    } catch {
+      return;
+    }
+  };
+
+  const updateBatchDraftRow = (
+    rowId: string,
+    key: keyof Omit<BatchDraftRow, "rowId">,
+    value: string
+  ) => {
+    setBatchDraftRows((current) =>
+      current.map((item) => (item.rowId === rowId ? { ...item, [key]: value } : item))
+    );
+  };
+  const addBatchDraftRow = () => {
+    setBatchDraftRows((current) => [...current, createBatchDraftRow()]);
+  };
+  const removeBatchDraftRow = (rowId: string) => {
+    setBatchDraftRows((current) =>
+      current.length <= 1 ? current : current.filter((item) => item.rowId !== rowId)
     );
   };
 
@@ -627,6 +1327,7 @@ export function WorkshopsPage() {
                   : null}
                 <button
                   className="route-btn active"
+                  data-testid="dashboard-launch-run-button"
                   type="button"
                   onClick={async () => {
                     try {
@@ -644,6 +1345,792 @@ export function WorkshopsPage() {
               </div>
               {launchRunMutation.error instanceof Error ? (
                 <div className="section-note">{launchRunMutation.error.message}</div>
+              ) : null}
+              <div className="detail-item">
+                <div className="file-name">{t(lang, { zh: "批量启动台", en: "Batch Launchpad" })}</div>
+                <div className="meta">
+                  {t(lang, {
+                    zh: "这里先整理批次草稿、导入 CSV / Excel、设置治理参数并刷新预算预估，再进入批次看板执行校验、启动、失败重试和取消剩余项。",
+                    en: "Prepare the draft rows, import CSV / Excel, set governance, and refresh the budget estimate here before moving into the batch board for validation, launch, retry, and cancellation.",
+                  })}
+                </div>
+              </div>
+              <div className="detail-item">
+                <div className="file-name">{t(lang, { zh: "批次标题", en: "Batch title" })}</div>
+                <label className="fake-input">
+                  <input
+                    className="search-inline-input"
+                    type="text"
+                    value={batchTitleDraft}
+                    onChange={(event) => setBatchTitleDraft(event.target.value)}
+                    placeholder={t(lang, {
+                      zh: "例如：品牌海报 7 月首轮批次",
+                      en: "For example: July poster wave 1",
+                    })}
+                  />
+                </label>
+              </div>
+              <div className="detail-item">
+                <div className="instance-head">
+                  <div className="file-name">{t(lang, { zh: "导入批次文件", en: "Import batch file" })}</div>
+                  <span className="pill">{t(lang, { zh: "CSV / XLSX", en: "CSV / XLSX" })}</span>
+                </div>
+                <div className="section-note">
+                  {t(lang, {
+                    zh: "使用首行作为表头。系统会自动识别 `title`、`path_suffix`、`target_path`、`initial_message`、`row_key`，其余列自动写入 context。",
+                    en: "The first row is used as headers. The system auto-detects `title`, `path_suffix`, `target_path`, `initial_message`, and `row_key`, then lets you override mappings and ignored columns after the first parse.",
+                  })}
+                </div>
+                <label className="fake-input" style={{ marginBottom: 10 }}>
+                  <input
+                    className="search-inline-input"
+                    type="file"
+                    accept=".csv,.xlsx,.xlsm,.xls"
+                    onChange={(event) => {
+                      importBatchRunFileMutation.reset();
+                      setBatchImportFile(event.target.files?.[0] ?? null);
+                      setBatchImportSheetName("");
+                      setBatchImportMappingDraft(createBatchImportMappingDraft());
+                    }}
+                  />
+                </label>
+                <div className="meta">
+                  {batchImportFile
+                    ? t(lang, {
+                        zh: `已选择 ${batchImportFile.name}`,
+                        en: `Selected ${batchImportFile.name}`,
+                      })
+                    : t(lang, {
+                        zh: "尚未选择文件",
+                        en: "No file selected yet",
+                      })}
+                </div>
+                <div className="task-row">
+                  <button
+                    className="route-btn active"
+                    disabled={!batchImportFile || importBatchRunFileMutation.isPending}
+                    type="button"
+                    onClick={() => {
+                      void runBatchImport();
+                    }}
+                  >
+                    {importBatchRunFileMutation.isPending
+                      ? t(lang, { zh: "导入中", en: "Importing" })
+                      : t(lang, { zh: "导入为批次行", en: "Import as batch rows" })}
+                  </button>
+                </div>
+                {importedBatchPreview ? (
+                  <div className="section-note">
+                    {t(lang, {
+                      zh: `\u5bfc\u5165 ${importedBatchPreview.importedRowCount} \u884c\uff0c\u8df3\u8fc7 ${importedBatchPreview.skippedRowCount} \u884c\uff0c\u5f53\u524d\u5de5\u4f5c\u8868 ${importedBatchPreview.activeSheetName ?? "default"}\uff0c\u8bc6\u522b\u5217\uff1a${importedBatchPreview.detectedColumns.join(", ") || "none"}`,
+                      en: `Imported ${importedBatchPreview.importedRowCount} rows, skipped ${importedBatchPreview.skippedRowCount}, active sheet ${importedBatchPreview.activeSheetName ?? "default"}, detected columns: ${importedBatchPreview.detectedColumns.join(", ") || "none"}`,
+                    })}
+                  </div>
+                ) : null}
+                {importedBatchPreview?.truncated ? (
+                  <div className="section-note">
+                    {t(lang, {
+                      zh: "\u5f53\u524d\u53ea\u663e\u793a\u9884\u89c8\u884c\uff0c\u8d85\u51fa preview limit \u7684\u6570\u636e\u672a\u5199\u5165\u8349\u7a3f\uff0c\u8bf7\u5148\u786e\u8ba4\u6620\u5c04\u3002",
+                      en: "The current preview is truncated. Review the field mapping before creating the batch draft.",
+                    })}
+                  </div>
+                ) : null}
+                {importedBatchPreview?.warnings.map((warning) => (
+                  <div className="section-note" key={warning}>
+                    {warning}
+                  </div>
+                ))}
+                {importBatchRunFileMutation.error instanceof Error ? (
+                  <div className="section-note">{importBatchRunFileMutation.error.message}</div>
+                ) : null}
+                {batchImportDetectedColumns.length > 0 ? (
+                  <div className="detail-item">
+                    <div className="instance-head">
+                      <div className="file-name">{t(lang, { zh: "\u5b57\u6bb5\u6620\u5c04", en: "Field mapping" })}</div>
+                      <span className="pill">
+                        {String(batchImportDetectedColumns.length).padStart(2, "0")}
+                      </span>
+                    </div>
+                    <div className="section-note">
+                      {t(lang, {
+                        zh: "\u5b57\u6bb5\u7559\u7a7a\u65f6\u7ee7\u7eed\u4f7f\u7528\u81ea\u52a8\u8bc6\u522b\u3002\u70b9\u51fb\u4e0b\u65b9\u5217\u540d\u53ef\u4ee5\u5207\u6362\u8be5\u5217\u662f\u5426\u5199\u5165 context\u3002",
+                        en: "Leave a field empty to keep auto-detection. Click the detected columns below to decide whether they stay in context.",
+                      })}
+                    </div>
+                    {importedBatchPreview.sheetNames.length > 1 ? (
+                      <label className="fake-input governance-field">
+                        <span>{t(lang, { zh: "\u5de5\u4f5c\u8868", en: "Worksheet" })}</span>
+                        <select
+                          className="governance-select"
+                          value={batchImportSheetName}
+                          onChange={(event) => setBatchImportSheetName(event.target.value)}
+                        >
+                          {importedBatchPreview.sheetNames.map((sheetName) => (
+                            <option key={sheetName} value={sheetName}>
+                              {sheetName}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
+                    <div className="governance-form-grid">
+                      {batchImportFieldKeys.map((fieldKey) => (
+                        <label className="fake-input governance-field" key={fieldKey}>
+                          <span>
+                            {fieldKey === "title"
+                              ? t(lang, { zh: "\u6807\u9898", en: "Title" })
+                              : fieldKey === "pathSuffix"
+                                ? t(lang, { zh: "\u8def\u5f84\u540e\u7f00", en: "Path suffix" })
+                                : fieldKey === "targetPath"
+                                  ? t(lang, { zh: "\u76ee\u6807\u8def\u5f84", en: "Target path" })
+                                  : fieldKey === "initialMessage"
+                                    ? t(lang, { zh: "\u9996\u6761\u6d88\u606f", en: "Initial message" })
+                                    : t(lang, { zh: "\u884c\u952e", en: "Row key" })}
+                          </span>
+                          <select
+                            className="governance-select"
+                            value={batchImportMappingDraft[fieldKey]}
+                            onChange={(event) => setBatchImportField(fieldKey, event.target.value)}
+                          >
+                            <option value="">
+                              {t(lang, { zh: "\u81ea\u52a8\u8bc6\u522b", en: "Auto-detect" })}
+                            </option>
+                            {batchImportDetectedColumns.map((column) => (
+                              <option
+                                disabled={batchImportFieldUsedByOtherMapping(fieldKey, column)}
+                                key={`${fieldKey}-${column}`}
+                                value={column}
+                              >
+                                {column}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      ))}
+                    </div>
+                    <div className="pill-row">
+                      {batchImportDetectedColumns.map((column) => {
+                        const mapped = batchImportMappedColumns.includes(column);
+                        const ignored = batchImportIgnoredColumns.includes(column);
+                        const tone = ignored ? "warn" : mapped ? "active" : "success";
+                        return (
+                          <button
+                            className={`path-chip ${tone}`}
+                            key={column}
+                            type="button"
+                            onClick={() => toggleBatchImportIgnoredColumn(column)}
+                          >
+                            {column}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="meta">
+                      {t(lang, {
+                        zh: `context \u5217\uff1a${batchImportContextColumns.join(", ") || "none"} / \u5ffd\u7565\u5217\uff1a${batchImportIgnoredColumns.join(", ") || "none"}` ,
+                        en: `Context columns: ${batchImportContextColumns.join(", ") || "none"} / Ignored columns: ${batchImportIgnoredColumns.join(", ") || "none"}` ,
+                      })}
+                    </div>
+                    {batchImportDuplicateColumns.length > 0 ? (
+                      <div className="section-note">
+                        {t(lang, {
+                          zh: `\u4ee5\u4e0b\u5217\u88ab\u91cd\u590d\u6620\u5c04\uff1a${batchImportDuplicateColumns.join(", ")}` ,
+                          en: `These columns are mapped more than once: ${batchImportDuplicateColumns.join(", ")}` ,
+                        })}
+                      </div>
+                    ) : null}
+                    <div className="task-row">
+                      <button
+                        className="route-btn"
+                        disabled={!batchImportFile || importBatchRunFileMutation.isPending}
+                        type="button"
+                        onClick={() => {
+                          const resetDraft = createBatchImportMappingDraft();
+                          const resetSheetName =
+                            importedBatchPreview.activeSheetName ??
+                            importedBatchPreview.sheetNames[0] ??
+                            "";
+                          setBatchImportMappingDraft(resetDraft);
+                          setBatchImportSheetName(resetSheetName);
+                          void runBatchImport({
+                            mapping: buildBatchImportMappingInput(resetDraft),
+                            sheetName: resetSheetName,
+                          });
+                        }}
+                      >
+                        {t(lang, { zh: "\u6062\u590d\u81ea\u52a8\u6620\u5c04", en: "Reset to auto-detect" })}
+                      </button>
+                      <button
+                        className="route-btn active"
+                        disabled={!batchImportFile || importBatchRunFileMutation.isPending}
+                        type="button"
+                        onClick={() => {
+                          void runBatchImport({
+                            mapping: buildBatchImportMappingInput(batchImportMappingDraft),
+                            sheetName: batchImportSheetName,
+                          });
+                        }}
+                      >
+                        {importBatchRunFileMutation.isPending
+                          ? t(lang, { zh: "\u91cd\u65b0\u89e3\u6790\u4e2d", en: "Refreshing" })
+                          : t(lang, { zh: "\u5e94\u7528\u6620\u5c04\u5e76\u5237\u65b0", en: "Apply mapping and refresh" })}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+              <div className="detail-item governance-card" data-testid="dashboard-batch-governance">
+                <div className="instance-head">
+                  <div className="file-name">{t(lang, { zh: "批次治理与预算预估", en: "Batch governance and estimate" })}</div>
+                  <span className="pill active">
+                    {batchEstimatePayload
+                      ? t(lang, { zh: "可估算", en: "Estimable" })
+                      : t(lang, { zh: "待补齐", en: "Needs input" })}
+                  </span>
+                </div>
+                <div className="section-note">
+                  {t(lang, {
+                    zh: "这里直接调用正式 `/v1/batch-runs/estimate` 契约，用当前批次行、并发、预算和重试策略生成预算区间与墙钟时间预估。",
+                    en: "This section calls the formal `/v1/batch-runs/estimate` contract with the current rows, concurrency, budget cap, and retry policy to calculate budget and wall-clock ranges.",
+                  })}
+                </div>
+                <div className="governance-form-grid">
+                  <label className="fake-input governance-field">
+                    <span>{t(lang, { zh: "并发上限", en: "Max concurrency" })}</span>
+                    <input
+                      className="search-inline-input"
+                      data-testid="dashboard-batch-max-parallel-runs"
+                      inputMode="numeric"
+                      min={1}
+                      max={50}
+                      step={1}
+                      type="number"
+                      value={batchGovernanceDraft.maxParallelRuns}
+                      onChange={(event) =>
+                        setBatchGovernanceDraft((current) => ({
+                          ...current,
+                          maxParallelRuns: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                  <label className="fake-input governance-field">
+                    <span>{t(lang, { zh: "失败重试次数", en: "Retry limit" })}</span>
+                    <input
+                      className="search-inline-input"
+                      data-testid="dashboard-batch-retry-limit"
+                      inputMode="numeric"
+                      min={0}
+                      max={10}
+                      step={1}
+                      type="number"
+                      value={batchGovernanceDraft.retryLimit}
+                      onChange={(event) =>
+                        setBatchGovernanceDraft((current) => ({
+                          ...current,
+                          retryLimit: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                  <label className="fake-input governance-field">
+                    <span>{t(lang, { zh: "预算上限 (USD)", en: "Budget cap (USD)" })}</span>
+                    <input
+                      className="search-inline-input"
+                      data-testid="dashboard-batch-budget-limit"
+                      inputMode="decimal"
+                      min={0}
+                      step="0.01"
+                      type="number"
+                      value={batchGovernanceDraft.budgetLimit}
+                      onChange={(event) =>
+                        setBatchGovernanceDraft((current) => ({
+                          ...current,
+                          budgetLimit: event.target.value,
+                        }))
+                      }
+                      placeholder={t(lang, {
+                        zh: "留空表示不设预算上限",
+                        en: "Leave blank to keep the batch uncapped",
+                      })}
+                    />
+                  </label>
+                  <div className="detail-item">
+                    <div className="file-name">{t(lang, { zh: "草稿摘要", en: "Draft summary" })}</div>
+                    <div className="pill-row">
+                      <span className="path-chip active">
+                        {t(lang, {
+                          zh: `批次行 ${batchDraftRows.length}`,
+                          en: `Rows ${batchDraftRows.length}`,
+                        })}
+                      </span>
+                      <span className="path-chip">
+                        {t(lang, {
+                          zh: `预算 ${batchGovernanceDraft.budgetLimit.trim() ? `$${batchGovernanceDraft.budgetLimit.trim()}` : "open"}`,
+                          en: `Budget ${batchGovernanceDraft.budgetLimit.trim() ? `$${batchGovernanceDraft.budgetLimit.trim()}` : "open"}`,
+                        })}
+                      </span>
+                    </div>
+                    <div className="meta">
+                      {t(lang, {
+                        zh: "估算结果只反映当前草稿输入；修改任意行或治理参数后需要重新刷新。",
+                        en: "Estimates reflect the current draft only. Refresh after any row or governance change.",
+                      })}
+                    </div>
+                  </div>
+                </div>
+                {batchLaunchValidationErrors.map((message) => (
+                  <div className="section-note" key={message}>
+                    {message}
+                  </div>
+                ))}
+                <div className="governance-form-actions">
+                  <button
+                    className="route-btn"
+                    data-testid="dashboard-batch-estimate-refresh"
+                    disabled={!batchEstimatePayload || estimateBatchRunMutation.isPending}
+                    type="button"
+                    onClick={async () => {
+                      if (!batchEstimatePayload) {
+                        return;
+                      }
+
+                      try {
+                        await estimateBatchRunMutation.mutateAsync(batchEstimatePayload);
+                      } catch {
+                        return;
+                      }
+                    }}
+                  >
+                    {estimateBatchRunMutation.isPending
+                      ? t(lang, { zh: "估算中", en: "Estimating" })
+                      : t(lang, { zh: "刷新预算预估", en: "Refresh estimate" })}
+                  </button>
+                </div>
+                {estimateBatchRunMutation.error instanceof Error ? (
+                  <div className="section-note">{estimateBatchRunMutation.error.message}</div>
+                ) : null}
+                {estimateBatchRunMutation.data ? (
+                  <div className="detail-item" data-testid="dashboard-batch-estimate-result">
+                    <div className="instance-head">
+                      <div className="file-name">{t(lang, { zh: "预估结果", en: "Estimate result" })}</div>
+                      <span className={`pill ${estimateBatchRunMutation.data.withinBudget ? "active" : "warn"}`}>
+                        {estimateBatchRunMutation.data.withinBudget
+                          ? t(lang, { zh: "预算内", en: "Within budget" })
+                          : t(lang, { zh: "超出预算", en: "Over budget" })}
+                      </span>
+                    </div>
+                    {batchEstimateIsStale ? (
+                      <div className="section-note">
+                        {t(lang, {
+                          zh: "当前输入已经变化，下面的预估结果需要重新刷新后才可作为最新参考。",
+                          en: "The inputs have changed. Refresh the estimate before treating the numbers below as current.",
+                        })}
+                      </div>
+                    ) : null}
+                    <div className="metric-grid">
+                      {[
+                        {
+                          label: t(lang, { zh: "总成本区间", en: "Total cost range" }),
+                          value: formatUsdRange(
+                            estimateBatchRunMutation.data.estimatedTotalAmountUsdLow,
+                            estimateBatchRunMutation.data.estimatedTotalAmountUsdHigh
+                          ),
+                          note: t(lang, { zh: "按当前草稿批次估算", en: "Calculated from the current draft" }),
+                        },
+                        {
+                          label: t(lang, { zh: "墙钟时间", en: "Wall-clock time" }),
+                          value: `${formatNumericRange(
+                            estimateBatchRunMutation.data.estimatedWallClockMinutesLow,
+                            estimateBatchRunMutation.data.estimatedWallClockMinutesHigh
+                          )} min`,
+                          note: t(lang, { zh: "已考虑并发上限", en: "Includes the current concurrency cap" }),
+                        },
+                        {
+                          label: t(lang, { zh: "单行时长", en: "Per-row runtime" }),
+                          value: `${formatNumericRange(
+                            estimateBatchRunMutation.data.estimatedMinutesPerItemLow,
+                            estimateBatchRunMutation.data.estimatedMinutesPerItemHigh
+                          )} min`,
+                          note: t(lang, { zh: "用于估算运行主链耗时", en: "Used for runtime-chain cost projection" }),
+                        },
+                        {
+                          label: t(lang, { zh: "剩余预算", en: "Budget remaining" }),
+                          value:
+                            estimateBatchRunMutation.data.budgetLimit == null
+                              ? t(lang, { zh: "未设上限", en: "Uncapped" })
+                              : formatUsdRange(
+                                  estimateBatchRunMutation.data.budgetRemainingUsdLow ?? 0,
+                                  estimateBatchRunMutation.data.budgetRemainingUsdHigh ?? 0
+                                ),
+                          note: t(lang, { zh: "高区间先用于阻断判断", en: "The high range is used for budget gating" }),
+                        },
+                      ].map((item) => (
+                        <div className="metric-card" key={item.label}>
+                          <div className="metric-label">{item.label}</div>
+                          <div className="metric-value">{item.value}</div>
+                          <div className="tiny-note">{item.note}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {estimateBatchRunMutation.data.metrics.length > 0 ? (
+                      <div className="detail-item">
+                        <div className="file-name">{t(lang, { zh: "计费指标拆分", en: "Cost metric breakdown" })}</div>
+                        {estimateBatchRunMutation.data.metrics.map((metric) => (
+                          <div className="detail-item" key={metric.metric}>
+                            <div className="instance-head">
+                              <div className="file-name">{t(lang, metric.label)}</div>
+                              <span className="pill active">{metric.metric}</span>
+                            </div>
+                            <div className="meta">
+                              {t(lang, {
+                                zh: `数量 ${formatNumericRange(metric.quantityLow, metric.quantityHigh, 2)} / 单价 ${formatUsdAmount(metric.unitPriceUsd)} / 金额 ${formatUsdRange(metric.amountUsdLow, metric.amountUsdHigh)}`,
+                                en: `Quantity ${formatNumericRange(metric.quantityLow, metric.quantityHigh, 2)} / Unit price ${formatUsdAmount(metric.unitPriceUsd)} / Amount ${formatUsdRange(metric.amountUsdLow, metric.amountUsdHigh)}`,
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    {estimateBatchRunMutation.data.warnings.map((warning) => (
+                      <div className="section-note" key={warning}>
+                        {warning}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              <div className="detail-item">
+                <div className="instance-head">
+                  <div className="file-name">{t(lang, { zh: "批次行编辑", en: "Batch row editor" })}</div>
+                  <span className="pill">{String(batchDraftRows.length).padStart(2, "0")}</span>
+                </div>
+                <div className="section-note">
+                  {t(lang, {
+                    zh: "每一行会创建一个独立实例。路径后缀拼到服务 target root 下；上下文字段使用 `key: value` 每行一项。",
+                    en: "Each row creates an independent instance. Path suffixes append under the service target root, and context fields use one `key: value` line each.",
+                  })}
+                </div>
+                {batchDraftRows.map((row, index) => (
+                  <div className="detail-item" key={row.rowId}>
+                    <div className="instance-head">
+                      <div className="file-name">
+                        {t(lang, {
+                          zh: `第 ${String(index + 1).padStart(2, "0")} 行`,
+                          en: `Row ${String(index + 1).padStart(2, "0")}`,
+                        })}
+                      </div>
+                      <button
+                        className="route-btn"
+                        disabled={batchDraftRows.length <= 1}
+                        type="button"
+                        onClick={() => removeBatchDraftRow(row.rowId)}
+                      >
+                        {t(lang, { zh: "删除", en: "Remove" })}
+                      </button>
+                    </div>
+                    <label className="fake-input" style={{ marginBottom: 10 }}>
+                      <input
+                        className="search-inline-input"
+                        type="text"
+                        value={row.title}
+                        onChange={(event) => updateBatchDraftRow(row.rowId, "title", event.target.value)}
+                        placeholder={t(lang, {
+                          zh: "实例标题，例如：Poster A",
+                          en: "Run title, for example Poster A",
+                        })}
+                      />
+                    </label>
+                    <label className="fake-input" style={{ marginBottom: 10 }}>
+                      <input
+                        className="search-inline-input"
+                        type="text"
+                        value={row.pathSuffix}
+                        onChange={(event) =>
+                          updateBatchDraftRow(row.rowId, "pathSuffix", event.target.value)
+                        }
+                        placeholder={t(lang, {
+                          zh: "路径后缀，例如：poster-a",
+                          en: "Path suffix, for example poster-a",
+                        })}
+                      />
+                    </label>
+                    <label className="fake-input" style={{ marginBottom: 10 }}>
+                      <textarea
+                        style={{
+                          width: "100%",
+                          minHeight: 72,
+                          border: "none",
+                          background: "transparent",
+                          color: "inherit",
+                          resize: "vertical",
+                          outline: "none",
+                          font: "inherit",
+                        }}
+                        value={row.contextText}
+                        onChange={(event) =>
+                          updateBatchDraftRow(row.rowId, "contextText", event.target.value)
+                        }
+                        placeholder={t(lang, {
+                          zh: "context 示例：region: hk",
+                          en: "Context example: region: hk",
+                        })}
+                      />
+                    </label>
+                    <label className="fake-input">
+                      <input
+                        className="search-inline-input"
+                        type="text"
+                        value={row.initialMessage}
+                        onChange={(event) =>
+                          updateBatchDraftRow(row.rowId, "initialMessage", event.target.value)
+                        }
+                        placeholder={t(lang, {
+                          zh: "可选：首条补充消息",
+                          en: "Optional: first follow-up message",
+                        })}
+                      />
+                    </label>
+                  </div>
+                ))}
+                <div className="task-row">
+                  <button className="route-btn" type="button" onClick={addBatchDraftRow}>
+                    {t(lang, { zh: "新增一行", en: "Add row" })}
+                  </button>
+                  <button
+                    className="route-btn active"
+                    data-testid="dashboard-batch-create-draft"
+                    disabled={!canCreateBatchDraft || createBatchRunMutation.isPending}
+                    type="button"
+                    onClick={async () => {
+                      if (!selectedService || !batchGovernanceValidation.governance) {
+                        return;
+                      }
+
+                      try {
+                        await createBatchRunMutation.mutateAsync({
+                          targetServiceId: selectedService.id,
+                          title: batchTitleDraft.trim() || undefined,
+                          items: batchDraftItems,
+                          governance: batchGovernanceValidation.governance,
+                        });
+                      } catch {
+                        return;
+                      }
+                    }}
+                  >
+                    {createBatchRunMutation.isPending
+                      ? t(lang, { zh: "创建中", en: "Creating" })
+                      : t(lang, { zh: "创建批次草稿", en: "Create batch draft" })}
+                  </button>
+                </div>
+                {createBatchRunMutation.error instanceof Error ? (
+                  <div className="section-note">{createBatchRunMutation.error.message}</div>
+                ) : null}
+              </div>
+              <div className="detail-item">
+                <div className="instance-head">
+                  <div className="file-name">{t(lang, { zh: "最近批次", en: "Recent batches" })}</div>
+                  <span className="pill">
+                    {String(recentBatchRuns.length).padStart(2, "0")}
+                  </span>
+                </div>
+                {recentBatchRuns.length === 0 ? (
+                  <div className="section-note">
+                    {t(lang, {
+                      zh: "当前服务还没有批次记录。",
+                      en: "This service does not have any batch jobs yet.",
+                    })}
+                  </div>
+                ) : (
+                  recentBatchRuns.slice(0, 3).map((item) => (
+                    <div className="detail-item" key={item.job.batchJobId}>
+                      <div className="instance-head">
+                        <div className="file-name">{item.job.title}</div>
+                        <span className="pill active">{item.job.status}</span>
+                      </div>
+                      <div className="meta">
+                        {t(lang, {
+                          zh: `成功 ${item.summary.succeededCount} / 失败 ${item.summary.failedCount} / 运行中 ${item.summary.runningCount + item.summary.startingCount + item.summary.queuedCount}`,
+                          en: `Succeeded ${item.summary.succeededCount} / Failed ${item.summary.failedCount} / Active ${item.summary.runningCount + item.summary.startingCount + item.summary.queuedCount}`,
+                        })}
+                      </div>
+                      <div className="task-row">
+                        <button
+                          className="route-btn active"
+                          data-testid={`dashboard-batch-open-board-${item.job.batchJobId}`}
+                          type="button"
+                          onClick={() =>
+                            navigate(dashboardRoutes.serviceBatch(selectedService.id, item.job.batchJobId))
+                          }
+                        >
+                          {t(lang, { zh: "打开批次看板", en: "Open batch board" })}
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+              {selectedBatch ? (
+                <div className="detail-item" data-testid="dashboard-batch-board">
+                  <div className="instance-head">
+                    <div className="file-name">{t(lang, { zh: "当前批次看板", en: "Current batch board" })}</div>
+                    <span className="pill active" data-testid="dashboard-batch-board-status">
+                      {selectedBatch.job.status}
+                    </span>
+                  </div>
+                  <div className="pill-row">
+                    <span className="path-chip active">
+                      {t(lang, {
+                        zh: `总数 ${selectedBatch.summary.totalCount}`,
+                        en: `Total ${selectedBatch.summary.totalCount}`,
+                      })}
+                    </span>
+                    <span className="path-chip">
+                      {t(lang, {
+                        zh: `成功 ${selectedBatch.summary.succeededCount}`,
+                        en: `Succeeded ${selectedBatch.summary.succeededCount}`,
+                      })}
+                    </span>
+                    <span className="path-chip">
+                      {t(lang, {
+                        zh: `失败 ${selectedBatch.summary.failedCount}`,
+                        en: `Failed ${selectedBatch.summary.failedCount}`,
+                      })}
+                    </span>
+                    <span className="path-chip">
+                      {t(lang, {
+                        zh: `待审批 ${selectedBatch.summary.waitingApprovalCount}`,
+                        en: `Approval ${selectedBatch.summary.waitingApprovalCount}`,
+                      })}
+                    </span>
+                  </div>
+                  <div className="meta">
+                    {t(lang, {
+                      zh: `并发 ${selectedBatch.job.maxParallelRuns} / 预算 ${selectedBatch.job.budgetLimit ?? "none"} / 重试 ${selectedBatch.job.retryLimit}`,
+                      en: `Concurrency ${selectedBatch.job.maxParallelRuns} / Budget ${selectedBatch.job.budgetLimit ?? "none"} / Retry ${selectedBatch.job.retryLimit}`,
+                    })}
+                  </div>
+                  <div className="task-row">
+                    <button
+                      className="route-btn"
+                      data-testid="dashboard-batch-validate"
+                      disabled={validateBatchRunMutation.isPending}
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await validateBatchRunMutation.mutateAsync(selectedBatch.job.batchJobId);
+                        } catch {
+                          return;
+                        }
+                      }}
+                    >
+                      {validateBatchRunMutation.isPending
+                        ? t(lang, { zh: "校验中", en: "Validating" })
+                        : t(lang, { zh: "校验批次", en: "Validate batch" })}
+                    </button>
+                    <button
+                      className="route-btn active"
+                      data-testid="dashboard-batch-start"
+                      disabled={startBatchRunMutation.isPending}
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await startBatchRunMutation.mutateAsync(selectedBatch.job.batchJobId);
+                        } catch {
+                          return;
+                        }
+                      }}
+                    >
+                      {startBatchRunMutation.isPending
+                        ? t(lang, { zh: "启动中", en: "Starting" })
+                        : t(lang, { zh: "启动剩余项", en: "Start pending items" })}
+                    </button>
+                    <button
+                      className="route-btn"
+                      data-testid="dashboard-batch-retry"
+                      disabled={retryBatchRunMutation.isPending}
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await retryBatchRunMutation.mutateAsync(selectedBatch.job.batchJobId);
+                        } catch {
+                          return;
+                        }
+                      }}
+                    >
+                      {retryBatchRunMutation.isPending
+                        ? t(lang, { zh: "重跑中", en: "Retrying" })
+                        : t(lang, { zh: "重跑失败项", en: "Retry failed items" })}
+                    </button>
+                    <button
+                      className="route-btn"
+                      data-testid="dashboard-batch-cancel"
+                      disabled={cancelBatchRunMutation.isPending}
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await cancelBatchRunMutation.mutateAsync(selectedBatch.job.batchJobId);
+                        } catch {
+                          return;
+                        }
+                      }}
+                    >
+                      {cancelBatchRunMutation.isPending
+                        ? t(lang, { zh: "取消中", en: "Cancelling" })
+                        : t(lang, { zh: "取消剩余项", en: "Cancel pending items" })}
+                    </button>
+                    <button
+                      className="route-btn"
+                      data-testid="dashboard-batch-back-to-launchpad"
+                      type="button"
+                      onClick={() => navigate(dashboardRoutes.service(selectedService.id))}
+                    >
+                      {t(lang, { zh: "返回启动台", en: "Back to launchpad" })}
+                    </button>
+                  </div>
+                  {validateBatchRunMutation.error instanceof Error ? (
+                    <div className="section-note">{validateBatchRunMutation.error.message}</div>
+                  ) : null}
+                  {startBatchRunMutation.error instanceof Error ? (
+                    <div className="section-note">{startBatchRunMutation.error.message}</div>
+                  ) : null}
+                  {retryBatchRunMutation.error instanceof Error ? (
+                    <div className="section-note">{retryBatchRunMutation.error.message}</div>
+                  ) : null}
+                  {cancelBatchRunMutation.error instanceof Error ? (
+                    <div className="section-note">{cancelBatchRunMutation.error.message}</div>
+                  ) : null}
+                  {selectedBatchItems.map((item) => (
+                    <div
+                      className="detail-item"
+                      data-testid={`dashboard-batch-item-${item.batchItemId}`}
+                      key={item.batchItemId}
+                    >
+                      <div className="instance-head">
+                        <div className="file-name">{item.title}</div>
+                        <span className="pill" data-testid={`dashboard-batch-item-status-${item.batchItemId}`}>
+                          {item.status}
+                        </span>
+                      </div>
+                      <div className="route-code">{item.targetPath}</div>
+                      <div className="meta">
+                        {item.runId
+                          ? t(lang, {
+                              zh: `关联实例 ${item.runId} / 运行状态 ${item.runStatus ?? "n/a"}`,
+                              en: `Linked run ${item.runId} / runtime status ${item.runStatus ?? "n/a"}`,
+                            })
+                          : t(lang, {
+                              zh: `尚未创建实例 / 已尝试 ${item.attemptCount} 次`,
+                              en: `Run not created yet / attempted ${item.attemptCount} times`,
+                            })}
+                      </div>
+                      {item.errorMessage ? (
+                        <div className="section-note">{item.errorMessage}</div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
               ) : null}
             </div>
           ) : selectedWorkshop && focusService ? (

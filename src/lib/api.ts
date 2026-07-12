@@ -1,5 +1,6 @@
 import {
   createAuthApiClient,
+  createBatchRunsApiClient,
   createBillingApiClient,
   createCredentialsApiClient,
   createCreatorApiClient,
@@ -9,6 +10,7 @@ import {
   createQuotaApiClient,
   createRunsApiClient,
   createSearchApiClient,
+  createSessionsApiClient,
   createSessionRefreshFetch,
   getRunFileDownloadUrl,
   createWorkshopCatalogApiClient,
@@ -52,6 +54,12 @@ export const dashboardRunsApi = createRunsApiClient({
   getAccessToken: getDashboardAccessToken,
 });
 
+export const dashboardBatchRunsApi = createBatchRunsApiClient({
+  baseUrl: dashboardApiBaseUrl,
+  fetcher: dashboardAuthFetch,
+  getAccessToken: getDashboardAccessToken,
+});
+
 export const dashboardCatalogApi = createWorkshopCatalogApiClient({
   baseUrl: dashboardApiBaseUrl,
   fetcher: dashboardAuthFetch,
@@ -59,6 +67,12 @@ export const dashboardCatalogApi = createWorkshopCatalogApiClient({
 });
 
 export const dashboardSearchApi = createSearchApiClient({
+  baseUrl: dashboardApiBaseUrl,
+  fetcher: dashboardAuthFetch,
+  getAccessToken: getDashboardAccessToken,
+});
+
+export const dashboardSessionsApi = createSessionsApiClient({
   baseUrl: dashboardApiBaseUrl,
   fetcher: dashboardAuthFetch,
   getAccessToken: getDashboardAccessToken,

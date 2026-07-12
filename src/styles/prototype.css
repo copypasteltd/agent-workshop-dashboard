@@ -1113,9 +1113,41 @@
       border-left: 2px solid var(--warn);
     }
 
+    .approval-inline-card {
+      display: grid;
+      gap: 10px;
+      border-color: color-mix(in srgb, var(--warn) 20%, var(--line));
+      background: color-mix(in srgb, var(--warn-soft) 28%, var(--surface));
+    }
+
     .message-body {
       font-size: 13px;
       line-height: 1.78;
+    }
+
+    .approval-inline-note {
+      padding: 10px 12px;
+      border-radius: var(--radius-soft);
+      border: 1px solid color-mix(in srgb, var(--warn) 18%, transparent);
+      background: color-mix(in srgb, var(--warn-soft) 55%, transparent);
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .approval-action-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .approval-action-row .route-btn,
+    .approval-action-row .path-chip {
+      min-height: 34px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
     }
 
     .message-attachment-list,

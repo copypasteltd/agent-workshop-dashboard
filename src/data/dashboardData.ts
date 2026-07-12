@@ -82,16 +82,6 @@ export type CreatorPackage = {
   release: { summary: LocalizedString; items: LocalizedString[] };
 };
 
-export type DashboardWorkspace = {
-  id: string;
-  name: LocalizedString;
-  type: LocalizedString;
-  meta: LocalizedString;
-  root: string;
-  workshopIds: string[];
-  packageIds: string[];
-};
-
 export const dashboardAssets = {
   logo: "/assets/logo.svg",
   tax: "/assets/workshop-tax.svg",
@@ -99,36 +89,6 @@ export const dashboardAssets = {
   image: "/assets/workshop-image.svg",
   runtime: "/assets/runtime-map.svg",
 };
-
-export const dashboardWorkspaces: DashboardWorkspace[] = [
-  {
-    id: "harbor-finance",
-    name: l("华港财务组", "Harbor Finance Team"),
-    type: l("企业", "Enterprise"),
-    meta: l("财务成员 / 已连接 4 项能力", "Finance members / 4 mounted capabilities"),
-    root: "/workspace/tax-q2/",
-    workshopIds: ["enterprise-tax"],
-    packageIds: ["chrome-tax-runner"],
-  },
-  {
-    id: "personal",
-    name: l("个人空间", "Personal Workspace"),
-    type: l("个人", "Personal"),
-    meta: l("个人项目 / 已连接 2 项能力", "Personal projects / 2 mounted capabilities"),
-    root: "/workspace/personal/",
-    workshopIds: ["creator-drama", "brand-poster-suite"],
-    packageIds: ["creator-drama-suite", "brand-poster-suite"],
-  },
-  {
-    id: "brand-lab",
-    name: l("品牌内容组", "Brand Content Team"),
-    type: l("企业", "Enterprise"),
-    meta: l("内容编辑 / 已连接 3 项能力", "Content editors / 3 mounted capabilities"),
-    root: "/workspace/poster-batch-17/",
-    workshopIds: ["creator-drama", "brand-poster-suite"],
-    packageIds: ["creator-drama-suite", "brand-poster-suite"],
-  },
-];
 
 export const workshops: Workshop[] = [
   {
