@@ -14,6 +14,7 @@ export const dashboardRoutes = {
   instances: "/dashboard/instances",
   instance: (instanceId: string, tab: InstanceTab = "overview") =>
     tab === "overview" ? `/dashboard/instances/${instanceId}` : `/dashboard/instances/${instanceId}/${tab}`,
+  providers: "/dashboard/providers",
   creator: "/dashboard/creator",
   creatorPackage: (packageId: string) => `/dashboard/creator/packages/${packageId}`,
   creatorDebug: (packageId: string) => `/dashboard/creator/packages/${packageId}/debug`,

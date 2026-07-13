@@ -36,7 +36,11 @@ import { isCreatorGovernanceTarget, resolveCreatorAccessState } from "../../lib/
 import { dashboardCatalogApi, dashboardCreatorApi, dashboardSessionsApi } from "../../lib/api";
 import { l, t, type LocalizedString } from "../../lib/i18n";
 import { dashboardRoutes, governanceSections, isGovernanceSection, type GovernanceSection } from "../../lib/routes";
-import { listDashboardWorkspaceViews, resolveDashboardWorkspaceView } from "../../lib/workspaceContext";
+import {
+  hasAuthoritativeDashboardWorkspaceContext,
+  listDashboardWorkspaceViews,
+  resolveDashboardWorkspaceView,
+} from "../../lib/workspaceContext";
 import { CreatorGovernancePanel, type GovernanceMeta } from "./CreatorGovernancePanel";
 import { CreatorReleasePanel, CreatorReplayPanel } from "./CreatorReleasePanels";
 import { useDashboardAuthStore } from "../../stores/dashboardAuthStore";
@@ -1082,237 +1086,75 @@ function buildCreatorOperationMeta(input: {
   };
 }
 
+function createGovernanceMeta(input: {
+  title: LocalizedString;
+  actions: LocalizedString[];
+  headers: GovernanceMeta["headers"];
+}): GovernanceMeta {
+  return {
+    title: input.title,
+    summary: l(
+      "该治理分段只展示正式后端数据，不再渲染静态参考样例。",
+      "This governance segment renders formal backend data only and no longer falls back to static samples."
+    ),
+    actions: input.actions,
+    metrics: [],
+    headers: input.headers,
+    rows: [],
+  };
+}
+
 const governanceMeta: Record<GovernanceSection, GovernanceMeta> = {
-  credentials: {
+  credentials: createGovernanceMeta({
     title: l("凭证与注入策略", "Credentials and injection policy"),
-    summary: l(
-      "治理页需要同时回答三件事：哪些凭证已经挂载、哪些是第三方引用、哪些凭证需要轮换或收敛作用域。",
-      "The governance page must answer three questions together: which secrets are mounted, which stay as third-party refs, and which need rotation or tighter scoping."
-    ),
     actions: [l("导出凭证清单", "Export credential ledger"), l("检查轮换计划", "Review rotation plan")],
-    metrics: [
-      { label: l("第一方挂载", "First-party mounts"), value: "04", note: l("实例启动即挂载。", "Mounted at run boot.") },
-      { label: l("第三方引用", "Third-party refs"), value: "03", note: l("只保存 connector ref。", "Only connector refs are retained.") },
-      { label: l("待轮换", "Rotation due"), value: "01", note: l("下一个 7 天内到期。", "Expires within the next 7 days.") },
+    headers: [
+      l("凭证名称", "Credential"),
+      l("范围 / 提供方", "Scope / provider"),
+      l("状态", "State"),
+      l("注入摘要", "Injection summary"),
     ],
-    headers: [l("凭证域", "Credential domain"), l("作用范围", "Scope"), l("状态", "State"), l("注入方式", "Injection mode")],
-    rows: [
-      {
-        id: "cred-otp",
-        tone: "success",
-        cells: [
-          l("企业邮箱 OTP", "Enterprise OTP"),
-          l("华港财务组 / tax-filing", "Harbor Finance / tax-filing"),
-          l("已连接", "Connected"),
-          l("只读 secret mount，提交前回到审批节点。", "Readonly secret mount, returns to approval before submit."),
-        ],
-      },
-      {
-        id: "cred-seedance",
-        tone: "active",
-        cells: [
-          l("Seedance API", "Seedance API"),
-          l("品牌内容组 / creator-drama", "Brand Content / creator-drama"),
-          l("引用中", "Referenced"),
-          l("仅保存 connector ref，不烘焙进 session 包。", "Only the connector ref is stored and never baked into the session package."),
-        ],
-      },
-      {
-        id: "cred-image",
-        tone: "warn",
-        cells: [
-          l("私有图像 Key", "Private image key"),
-          l("个人空间 + 品牌内容工坊", "Personal + brand-content workshop"),
-          l("7 天内轮换", "Rotate in 7 days"),
-          l("按账户只读挂载，实例结束后容器销毁。", "Readonly per-account mount, destroyed with the container."),
-        ],
-      },
-    ],
-  },
-  members: {
+  }),
+  members: createGovernanceMeta({
     title: l("成员与空间边界", "Members and workspace boundaries"),
-    summary: l(
-      "工作区、包权限和实例查看权限必须成套展示，避免 Creator 侧只看到角色名而看不到实际可见范围。",
-      "Workspace, package access, and run visibility must be shown together so Creator never sees role names without their effective scope."
-    ),
     actions: [l("导出成员矩阵", "Export member matrix"), l("检查空间边界", "Review workspace boundaries")],
-    metrics: [
-      { label: l("工作区", "Workspaces"), value: "03", note: l("个人 + 2 个企业空间。", "Personal plus 2 enterprise spaces.") },
-      { label: l("Creator 角色", "Creator roles"), value: "05", note: l("区分发布、审计、治理。", "Split across release, audit, and governance.") },
-      { label: l("可接管实例", "Takeover-capable"), value: "02", note: l("具备实例接管权限。", "Can take over live runs.") },
+    headers: [
+      l("成员 / 角色", "Member / role"),
+      l("可见范围", "Visible scope"),
+      l("实例权限", "Run access"),
+      l("包权限", "Package access"),
     ],
-    headers: [l("成员 / 角色", "Member / role"), l("可见范围", "Visible scope"), l("实例权限", "Run access"), l("包权限", "Package access")],
-    rows: [
-      {
-        id: "member-finance",
-        tone: "success",
-        cells: [
-          l("李宁 / 财务成员", "Li Ning / finance operator"),
-          l("华港财务组", "Harbor Finance Team"),
-          l("只读实例 + 提交审批", "Read runs + approve submit"),
-          l("只读 chrome-tax-runner", "Readonly chrome-tax-runner"),
-        ],
-      },
-      {
-        id: "member-director",
-        tone: "active",
-        cells: [
-          l("许导 / 内容导演", "Director Xu / content lead"),
-          l("品牌内容组 + 个人空间", "Brand Content + Personal"),
-          l("查看、追问、补充导演意见", "Read, follow up, add director notes"),
-          l("可发布 creator-drama-suite", "Can release creator-drama-suite"),
-        ],
-      },
-      {
-        id: "member-admin",
-        tone: "warn",
-        cells: [
-          l("系统管理员 / Governance", "System admin / governance"),
-          l("全部工作区", "All workspaces"),
-          l("查看全部实例与审计账本", "Read all runs and audit ledgers"),
-          l("可治理全部 package 与凭证域", "Can govern all packages and secret domains"),
-        ],
-      },
-    ],
-  },
-  policy: {
+  }),
+  policy: createGovernanceMeta({
     title: l("运行与审批策略", "Runtime and approval policy"),
-    summary: l(
-      "治理页中的策略必须直接对应实例行为，包括浏览器审批、路径白名单和容器销毁策略。",
-      "Policies shown in governance must map directly to runtime behavior, including browser approvals, path allowlists, and container teardown."
-    ),
     actions: [l("查看策略快照", "View policy snapshot"), l("导出白名单", "Export allowlists")],
-    metrics: [
-      { label: l("浏览器敏感动作", "Sensitive browser actions"), value: "审批后执行", note: l("提交、支付、确认类动作。", "Submit, pay, and confirm actions.") },
-      { label: l("路径白名单", "Path allowlists"), value: "03 层", note: l("root / output / archive。", "root / output / archive.") },
-      { label: l("容器策略", "Container policy"), value: "独占销毁", note: l("实例关闭即销毁。", "Destroyed on instance close.") },
+    headers: [
+      l("策略对象", "Policy object"),
+      l("来源 / 作用域", "Source / scope"),
+      l("状态", "State"),
+      l("执行说明", "Execution note"),
     ],
-    headers: [l("策略项", "Policy"), l("作用域", "Scope"), l("当前值", "Current value"), l("执行说明", "Execution note")],
-    rows: [
-      {
-        id: "policy-browser",
-        tone: "warn",
-        cells: [
-          l("浏览器高风险动作", "High-risk browser actions"),
-          l("tax-filing / poster-batch", "tax-filing / poster-batch"),
-          l("审批节点强制开启", "Approval node required"),
-          l("提交、支付、删除类动作全部回到对话流。", "All submit, payment, and destructive actions return to the conversation."),
-        ],
-      },
-      {
-        id: "policy-path",
-        tone: "success",
-        cells: [
-          l("文件路径白名单", "File path allowlist"),
-          l("全部实例", "All runs"),
-          l("/workspace/<task-id>/*", "/workspace/<task-id>/*"),
-          l("允许切目录，不允许越出实例根路径。", "Directory switches are allowed, but leaving the task root is forbidden."),
-        ],
-      },
-      {
-        id: "policy-container",
-        tone: "active",
-        cells: [
-          l("独占容器生命周期", "Dedicated container lifecycle"),
-          l("全部实例", "All runs"),
-          l("实例关闭即销毁", "Destroy on close"),
-          l("结果目录与审计目录保留，运行容器不复用。", "Output and audit directories remain while runtime containers are never reused."),
-        ],
-      },
-    ],
-  },
-  audit: {
+  }),
+  audit: createGovernanceMeta({
     title: l("审计与发布留痕", "Audit and release ledger"),
-    summary: l(
-      "这里要覆盖发布前脱敏、调试回放、实例级导出三条链路，保证 session 包与运行结果都能被追溯。",
-      "This view must cover pre-release desensitization, debug replay, and per-run exports so both packages and results remain traceable."
-    ),
     actions: [l("导出审计 JSON", "Export audit JSON"), l("查看回放摘要", "Open replay summary")],
-    metrics: [
-      { label: l("待审计发布", "Pending releases"), value: "01", note: l("creator-drama-suite 待复核。", "creator-drama-suite awaits review.") },
-      { label: l("回放保留期", "Replay retention"), value: "90d", note: l("工具调用与路径差异保留 90 天。", "Tool calls and filesystem diffs are kept for 90 days.") },
-      { label: l("实例导出", "Run exports"), value: "支持", note: l("按实例导出 JSON 与摘要。", "Per-run JSON and summary export is enabled.") },
+    headers: [
+      l("留痕对象", "Ledger object"),
+      l("来源", "Source"),
+      l("保留策略", "Retention"),
+      l("当前状态", "Current status"),
     ],
-    headers: [l("留痕对象", "Ledger object"), l("来源", "Source"), l("保留策略", "Retention"), l("当前状态", "Current status")],
-    rows: [
-      {
-        id: "audit-release",
-        tone: "warn",
-        cells: [
-          l("发布前脱敏清单", "Pre-release desensitization"),
-          l("creator-drama-suite", "creator-drama-suite"),
-          l("发布前必做", "Required before release"),
-          l("剩余 1 项路径引用复核。", "One path-reference review item remains."),
-        ],
-      },
-      {
-        id: "audit-trace",
-        tone: "success",
-        cells: [
-          l("Debug 回放", "Debug replay"),
-          l("chrome-tax-runner", "chrome-tax-runner"),
-          l("90 天", "90 days"),
-          l("消息时序、工具调用和路径差异均可回放。", "Message order, tool calls, and path diffs are all replayable."),
-        ],
-      },
-      {
-        id: "audit-export",
-        tone: "active",
-        cells: [
-          l("实例结果导出", "Per-run export"),
-          l("tax-q2 / poster-batch-17", "tax-q2 / poster-batch-17"),
-          l("结果目录长期保留", "Retained with result directories"),
-          l("支持导出审计 JSON、摘要和结果回执。", "Can export audit JSON, summaries, and final receipts."),
-        ],
-      },
-    ],
-  },
-  cost: {
+  }),
+  cost: createGovernanceMeta({
     title: l("成本与额度治理", "Cost and quota governance"),
-    summary: l(
-      "成本页要把工作区、账户和 package 维度的额度拆清楚，超额时必须能回到审批链路。",
-      "The cost view must separate workspace, account, and package quotas clearly and route overages back into the approval flow."
-    ),
     actions: [l("导出成本摘要", "Export cost summary"), l("查看额度阈值", "Inspect quota thresholds")],
-    metrics: [
-      { label: l("浏览器分钟", "Browser minutes"), value: "126", note: l("按工作区单独计量。", "Metered per workspace.") },
-      { label: l("图像额度", "Image quota"), value: "72%", note: l("个人空间与品牌工坊分开结算。", "Personal and brand-content spaces are billed separately.") },
-      { label: l("超额回流", "Overage callback"), value: "开启", note: l("超额动作回到审批节点。", "Overages route back to approval nodes.") },
+    headers: [
+      l("成本项", "Cost item"),
+      l("计量域", "Metering scope"),
+      l("当前使用", "Current usage"),
+      l("阈值 / 动作", "Threshold / action"),
     ],
-    headers: [l("成本项", "Cost item"), l("计量域", "Metering scope"), l("当前使用", "Current usage"), l("阈值 / 动作", "Threshold / action")],
-    rows: [
-      {
-        id: "cost-browser",
-        tone: "success",
-        cells: [
-          l("浏览器执行分钟", "Browser execution minutes"),
-          l("华港财务组", "Harbor Finance Team"),
-          l("42 / 120 分钟", "42 / 120 min"),
-          l("超过阈值后需继续审批。", "Crossing the threshold requires a new approval."),
-        ],
-      },
-      {
-        id: "cost-image",
-        tone: "warn",
-        cells: [
-          l("图像生成额度", "Image-generation quota"),
-          l("个人空间 + 品牌内容组", "Personal + Brand Content"),
-          l("72 / 100 点", "72 / 100 credits"),
-          l("剩余 28 点，建议收紧批量出图轮次。", "28 credits remain; reduce unnecessary batch generations."),
-        ],
-      },
-      {
-        id: "cost-api",
-        tone: "active",
-        cells: [
-          l("外部 API 调用", "External API calls"),
-          l("creator-drama-suite", "creator-drama-suite"),
-          l("680 / 2000 调用", "680 / 2000 calls"),
-          l("低于告警阈值，可继续灰度。", "Below the alert threshold and safe for staged rollout."),
-        ],
-      },
-    ],
-  },
+  }),
 };
 
 const governanceSectionLabel: Record<GovernanceSection, { zh: string; en: string }> = {
@@ -6029,17 +5871,23 @@ export function CreatorPage() {
     () =>
       resolveDashboardWorkspaceView({
         selectionId: currentWorkspaceId,
-        workspaces: authMode === "required" ? authWorkspaces : undefined,
-        fallbackWorkspaceId: authCurrentWorkspace?.workspaceId,
+        workspaces: authWorkspaces.length > 0 ? authWorkspaces : undefined,
+        fallbackWorkspace: authCurrentWorkspace,
       }),
-    [authCurrentWorkspace?.workspaceId, authMode, authWorkspaces, currentWorkspaceId]
+    [authCurrentWorkspace, authMode, authWorkspaces, currentWorkspaceId]
   );
   const workspaceViews = useMemo(
     () => {
       const authViews = listDashboardWorkspaceViews(
         authMode === "required" ? authWorkspaces : undefined
       );
-      return authViews.length > 0 ? authViews : [currentWorkspace];
+      if (authViews.length > 0) {
+        return authViews;
+      }
+
+      return hasAuthoritativeDashboardWorkspaceContext(currentWorkspace)
+        ? [currentWorkspace]
+        : [];
     },
     [authMode, authWorkspaces, currentWorkspace]
   );
@@ -6052,7 +5900,12 @@ export function CreatorPage() {
       }),
     [authMode, authenticated, currentWorkspace]
   );
-  const dataQueriesEnabled = authMode === "required" && authenticated && creatorAccess.canAccessCreator;
+  const workspaceDataReady = hasAuthoritativeDashboardWorkspaceContext(currentWorkspace);
+  const dataQueriesEnabled =
+    workspaceDataReady &&
+    authMode === "required" &&
+    authenticated &&
+    creatorAccess.canAccessCreator;
   const packagesQuery = useQuery({
     queryKey: [
       "dashboard",

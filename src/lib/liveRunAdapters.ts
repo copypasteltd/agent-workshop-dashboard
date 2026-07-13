@@ -3,7 +3,6 @@ import { resolveRunAttentionMode, resolveRunListTags } from "@lingban/domain-mod
 import type { InstanceRecord } from "../data/dashboardData";
 import { l } from "./i18n";
 import type { DashboardWorkspaceView } from "./workspaceContext";
-import { inferWorkspaceContextKey } from "./workspaceContext";
 
 function formatClock(iso: string) {
   const date = new Date(iso);
@@ -18,56 +17,29 @@ function formatClock(iso: string) {
   });
 }
 
-function inferWorkshopName(taskVersionId: string) {
-  if (taskVersionId.includes("tax")) {
-    return l("企业财税工坊", "Enterprise Tax Workshop");
-  }
-
-  if (taskVersionId.includes("drama")) {
-    return l("短剧生产工坊", "Drama Production Workshop");
-  }
-
-  if (taskVersionId.includes("poster")) {
-    return l("品牌内容工坊", "Brand Content Workshop");
-  }
-
-  return l("云端实例工坊", "Cloud Run Workshop");
-}
-
-function normalizeWorkspaceId(workspaceId: string) {
-  return inferWorkspaceContextKey({
-    workspaceId,
-  });
-}
-
 function resolveWorkshopName(snapshot: RunSnapshot) {
-  return snapshot.run.catalogMetadata?.workshopName ?? inferWorkshopName(snapshot.run.taskVersionId);
+  return (
+    snapshot.run.catalogMetadata?.workshopName ??
+    l(
+      snapshot.run.catalogMetadata?.workshopId ??
+        snapshot.run.taskVersionId ??
+        "未标注工坊",
+      snapshot.run.catalogMetadata?.workshopId ??
+        snapshot.run.taskVersionId ??
+        "Unlabeled workshop"
+    )
+  );
 }
 
 function resolveWorkspaceContextKey(snapshot: RunSnapshot) {
-  return snapshot.run.catalogMetadata?.workspaceContextKey ?? normalizeWorkspaceId(snapshot.run.workspaceId);
-}
-
-function inferWorkspaceName(workspaceId: string) {
-  const normalized = normalizeWorkspaceId(workspaceId);
-
-  if (normalized === "harbor-finance") {
-    return l("华港财务组", "Harbor Finance Team");
-  }
-
-  if (normalized === "brand-lab") {
-    return l("品牌内容组", "Brand Content Team");
-  }
-
-  if (normalized === "personal") {
-    return l("个人空间", "Personal Workspace");
-  }
-
-  return l("默认工作区", "Default Workspace");
+  return snapshot.run.catalogMetadata?.workspaceContextKey ?? snapshot.run.workspaceId;
 }
 
 function resolveWorkspaceName(snapshot: RunSnapshot) {
-  return snapshot.run.catalogMetadata?.workspaceContextName ?? inferWorkspaceName(snapshot.run.workspaceId);
+  return (
+    snapshot.run.catalogMetadata?.workspaceContextName ??
+    l(snapshot.run.workspaceId, snapshot.run.workspaceId)
+  );
 }
 
 function statusMeta(status: RunStatus) {
@@ -226,16 +198,16 @@ export function mapRunSnapshotToInstanceRecord(
       items: buildFileItems(snapshot.run.targetPath, files),
     },
     runtime: {
-      container: `container://${snapshot.run.runId}`,
-      image: "lingban-codex-runtime:workspace",
-      mounts: [
-        l(`任务根路径：${snapshot.run.targetPath}`, `Task root: ${snapshot.run.targetPath}`),
-        l(`工作区：${snapshot.run.workspaceId}`, `Workspace: ${snapshot.run.workspaceId}`),
-      ],
-      notes: [
-        l("当前实例仍然保持完整对话模式，可继续补充信息或要求继续执行。", "The run remains in full conversation mode and can continue with more inputs or execution requests."),
-        l("文件浏览限制在当前 target path 内。", "File browsing stays constrained to the current target path."),
-      ],
+      launchMode: snapshot.runtime.launchMode,
+      containerName: snapshot.runtime.containerName,
+      providerLabel: snapshot.provider?.displayName ?? null,
+      providerModel: snapshot.provider?.model ?? null,
+      providerBaseUrl: snapshot.provider?.baseUrl ?? null,
+      startedAt: snapshot.runtime.startedAt,
+      readyAt: snapshot.runtime.readyAt,
+      finishedAt: snapshot.runtime.finishedAt,
+      exitCode: snapshot.runtime.exitCode,
+      exitSignal: snapshot.runtime.exitSignal,
     },
     audit: {
       timeline: snapshot.messages.slice(-4).map((message) => ({

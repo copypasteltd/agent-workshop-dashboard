@@ -26,6 +26,7 @@ import { mapRunSnapshotToInstanceRecord } from "../lib/liveRunAdapters";
 import { dashboardRoutes } from "../lib/routes";
 import { applyDashboardTheme } from "../lib/theme";
 import {
+  hasAuthoritativeDashboardWorkspaceContext,
   listDashboardWorkspaceViews,
   resolveDashboardWorkspaceView,
 } from "../lib/workspaceContext";
@@ -218,17 +219,23 @@ export function DashboardShell() {
     () =>
       resolveDashboardWorkspaceView({
         selectionId: currentWorkspaceId,
-        workspaces: authMode === "required" ? authWorkspaces : undefined,
-        fallbackWorkspaceId: authCurrentWorkspace?.workspaceId,
+        workspaces: authWorkspaces.length > 0 ? authWorkspaces : undefined,
+        fallbackWorkspace: authCurrentWorkspace,
       }),
-    [authCurrentWorkspace?.workspaceId, authMode, authWorkspaces, currentWorkspaceId]
+    [authCurrentWorkspace, authMode, authWorkspaces, currentWorkspaceId]
   );
   const workspaceOptions = useMemo(
     () => {
       const authViews = listDashboardWorkspaceViews(
         authMode === "required" ? authWorkspaces : undefined
       );
-      return authViews.length > 0 ? authViews : [currentWorkspace];
+      if (authViews.length > 0) {
+        return authViews;
+      }
+
+      return hasAuthoritativeDashboardWorkspaceContext(currentWorkspace)
+        ? [currentWorkspace]
+        : [];
     },
     [authMode, authWorkspaces, currentWorkspace]
   );
@@ -241,7 +248,9 @@ export function DashboardShell() {
       }),
     [authMode, authenticated, currentWorkspace]
   );
-  const dataQueriesEnabled = authMode !== "required" || authenticated;
+  const workspaceDataReady = hasAuthoritativeDashboardWorkspaceContext(currentWorkspace);
+  const dataQueriesEnabled =
+    workspaceDataReady && (authMode !== "required" || authenticated);
   const workshopsQuery = useQuery({
     queryKey: [
       "dashboard",
@@ -534,9 +543,12 @@ export function DashboardShell() {
     [creatorAccess.canAccessCreator, packagesQuery.data]
   );
 
-  const view = useMemo<"workshops" | "instances" | "creator">(() => {
+  const view = useMemo<"workshops" | "instances" | "providers" | "creator">(() => {
     if (location.pathname.includes("/instances")) {
       return "instances";
+    }
+    if (location.pathname.includes("/providers")) {
+      return "providers";
     }
     if (location.pathname.includes("/creator")) {
       return "creator";
@@ -577,6 +589,14 @@ export function DashboardShell() {
       desc: t(lang, {
         zh: "多任务列表在左，当前实例的完整对话在中，文件、运行、审计等深层信息进入右侧子页签。",
         en: "The task list stays on the left, the full conversation for the active instance stays in the center, and files, runtime, and audit move into right-side subtabs.",
+      }),
+    },
+    providers: {
+      label: `dashboard://providers/${currentWorkspace.id}`,
+      title: t(lang, { zh: "Provider", en: "Providers" }),
+      desc: t(lang, {
+        zh: "鍦ㄥ悗鍙版帶鍒剁涓夋柟 OpenAI-compatible Provider銆侀粯璁ゆā鍨嬪拰宸ヤ綔鍖虹粦瀹氾紝鏂板缓 run 浼氬湪鍚姩鏃跺喅瀹氬疄闄呬笂娓告簮銆?",
+        en: "Control third-party OpenAI-compatible providers, default models, and workspace bindings from the dashboard. New runs resolve their upstream route at launch time.",
       }),
     },
     creator: {
@@ -669,7 +689,9 @@ export function DashboardShell() {
     searchResultsQuery.isSuccess;
   const searchResults = shouldUseRemoteSearchResults
     ? remoteSearchResults
-    : fallbackSearchResults;
+    : authMode === "required" && authenticated && trimmedGlobalSearchQuery.length > 0
+      ? []
+      : fallbackSearchResults;
   const searchHistoryItems = searchHistoryQuery.data?.items ?? [];
   const searchResultsPending =
     authMode === "required" &&
@@ -679,84 +701,20 @@ export function DashboardShell() {
       searchResultsQuery.isLoading ||
       searchResultsQuery.isFetching);
 
-  const fallbackNotificationItems = useMemo<ShellNotificationItem[]>(() => {
-    const next = [
-      ...visibleInstances
-        .filter((item) => item.statusClass === "warn")
-        .map((item) => ({
-          id: `approval:${item.id}`,
-          tone: "warn" as const,
-          title: t(lang, { zh: "待审批实例", en: "Approval pending" }),
-          note: `${t(lang, item.title)} / ${t(lang, item.nextAction)}`,
-          route: dashboardRoutes.instance(item.id, "audit"),
-        })),
-      ...visibleInstances
-        .filter((item) => item.statusClass === "active")
-        .slice(0, 2)
-        .map((item) => ({
-          id: `instance:${item.id}`,
-          tone: "active" as const,
-          title: t(lang, { zh: "运行中实例", en: "Active instance" }),
-          note: `${t(lang, item.title)} / ${t(lang, item.summary)}`,
-          route: dashboardRoutes.instance(item.id),
-        })),
-      ...visiblePackages
-        .filter((item) => item.statusClass !== "success")
-        .map((item) => ({
-          id: `package:${item.id}`,
-          tone: item.statusClass,
-          title:
-            item.statusClass === "warn"
-              ? t(lang, { zh: "待发布 package", en: "Pending package" })
-              : t(lang, { zh: "可发布 package", en: "Release-ready package" }),
-          note: `${t(lang, item.title)} / ${t(lang, item.status)}`,
-          route: dashboardRoutes.creatorPackage(item.id),
-        })),
-    ];
-
-    return next.slice(0, 6);
-  }, [lang, visibleInstances, visiblePackages]);
-
-  const packageNotificationItems = useMemo<ShellNotificationItem[]>(
+  const notificationItems = useMemo(
     () =>
-      visiblePackages
-        .filter((item) => item.statusClass !== "success")
-        .map((item) => ({
-          id: `package:${item.id}`,
-          tone: item.statusClass,
-          title:
-            item.statusClass === "warn"
-              ? t(lang, { zh: "待发布 package", en: "Pending package" })
-              : t(lang, { zh: "可发布 package", en: "Release-ready package" }),
-          note: `${t(lang, item.title)} / ${t(lang, item.status)}`,
-          route: dashboardRoutes.creatorPackage(item.id),
-          unread: true,
-        })),
-    [lang, visiblePackages]
+      notificationsQuery.isSuccess
+        ? notificationsQuery.data
+            .map((notice) => mapNotificationToDashboardItem(notice, lang))
+            .slice(0, 6)
+        : [],
+    [lang, notificationsQuery.data, notificationsQuery.isSuccess]
   );
 
-  const notificationItems = useMemo(() => {
-    if (notificationsQuery.isSuccess) {
-      return [
-        ...notificationsQuery.data.map((notice) => mapNotificationToDashboardItem(notice, lang)),
-        ...packageNotificationItems,
-      ].slice(0, 6);
-    }
-
-    return fallbackNotificationItems;
-  }, [
-    fallbackNotificationItems,
-    lang,
-    notificationsQuery.data,
-    notificationsQuery.isSuccess,
-    packageNotificationItems,
-  ]);
-
   const notificationCount = notificationsQuery.isSuccess
-    ? (notificationSummaryQuery.data?.unreadCount ??
-        notificationsQuery.data.filter((item) => !item.isRead).length) +
-      packageNotificationItems.length
-    : notificationItems.length;
+    ? notificationSummaryQuery.data?.unreadCount ??
+      notificationsQuery.data.filter((item) => !item.isRead).length
+    : 0;
 
   const accountSummaryCards = useMemo(() => {
     if (!meSummaryQuery.data) {
@@ -928,6 +886,15 @@ export function DashboardShell() {
               </svg>
             </button>
             <button
+              className={`rail-btn ${view === "providers" ? "active" : ""}`}
+              type="button"
+              onClick={() => navigate(dashboardRoutes.providers)}
+            >
+              <svg className="icon">
+                <use href="#i-network" />
+              </svg>
+            </button>
+            <button
               className={`rail-btn ${view === "creator" ? "active" : ""}`}
               type="button"
               onClick={() => navigate(dashboardRoutes.creator)}
@@ -993,6 +960,15 @@ export function DashboardShell() {
               </svg>
               <span className="nav-text">{t(lang, { zh: "实例", en: "Instances" })}</span>
             </NavLink>
+            <NavLink
+              className={({ isActive }) => `nav-btn ${isActive ? "active" : ""}`}
+              to={dashboardRoutes.providers}
+            >
+              <svg className="icon">
+                <use href="#i-network" />
+              </svg>
+              <span className="nav-text">{t(lang, { zh: "Provider", en: "Providers" })}</span>
+            </NavLink>
             {creatorAccess.canAccessCreator ? (
               <NavLink
                 className={({ isActive }) => `nav-btn ${isActive ? "active" : ""}`}
@@ -1024,19 +1000,28 @@ export function DashboardShell() {
                 {t(lang, { zh: "工作区切换", en: "Workspace Switch" })}
               </div>
               <div className="pill-row">
-                {workspaceOptions.map((item) => (
-                  <button
-                    className={`path-chip ${
-                      item.selectionId === currentWorkspace.selectionId ? "active" : ""
-                    }`}
-                    key={item.selectionId}
-                    type="button"
-                    disabled={switchWorkspaceMutation.isPending}
-                    onClick={() => switchWorkspaceMutation.mutate(item.selectionId)}
-                  >
-                    {t(lang, item.name)}
-                  </button>
-                ))}
+                {workspaceOptions.length > 0 ? (
+                  workspaceOptions.map((item) => (
+                    <button
+                      className={`path-chip ${
+                        item.selectionId === currentWorkspace.selectionId ? "active" : ""
+                      }`}
+                      key={item.selectionId}
+                      type="button"
+                      disabled={switchWorkspaceMutation.isPending}
+                      onClick={() => switchWorkspaceMutation.mutate(item.selectionId)}
+                    >
+                      {t(lang, item.name)}
+                    </button>
+                  ))
+                ) : (
+                  <div className="muted">
+                    {t(lang, {
+                      zh: "正在等待正式工作区列表。",
+                      en: "Waiting for the authoritative workspace list.",
+                    })}
+                  </div>
+                )}
               </div>
               <div className="muted">
                 {t(lang, currentWorkspace.meta)}

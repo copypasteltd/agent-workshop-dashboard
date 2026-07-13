@@ -15,6 +15,11 @@ const InstancesPage = lazy(async () =>
     default: module.InstancesPage,
   }))
 );
+const ProvidersPage = lazy(async () =>
+  import("../../pages/providers/ProvidersPage").then((module) => ({
+    default: module.ProvidersPage,
+  }))
+);
 const CreatorPage = lazy(async () =>
   import("../../pages/creator/CreatorPage").then((module) => ({
     default: module.CreatorPage,
@@ -77,6 +82,7 @@ function withRouteSuspense(node: ReactNode) {
 export function AppRouter() {
   const workshopsElement = withRouteSuspense(<WorkshopsPage />);
   const instancesElement = withRouteSuspense(<InstancesPage />);
+  const providersElement = withRouteSuspense(<ProvidersPage />);
   const creatorElement = withRouteSuspense(<CreatorPage />);
 
   return (
@@ -101,6 +107,8 @@ export function AppRouter() {
         <Route path={dashboardRoutes.instances} element={instancesElement} />
         <Route path="/dashboard/instances/:instanceId" element={instancesElement} />
         <Route path="/dashboard/instances/:instanceId/:detailTab" element={instancesElement} />
+        <Route path="/providers" element={providersElement} />
+        <Route path={dashboardRoutes.providers} element={providersElement} />
         <Route path="/creator" element={creatorElement} />
         <Route path="/creator/:packageId" element={creatorElement} />
         <Route path={dashboardRoutes.creator} element={creatorElement} />

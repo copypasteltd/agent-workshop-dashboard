@@ -1,3 +1,4 @@
+import { ApiError } from "@lingban/api-sdk";
 import type {
   BatchRunDraftItemInput,
   BatchRunImportFieldMapping,
@@ -6,13 +7,14 @@ import type {
   WorkshopCatalogEntry,
 } from "@lingban/contracts";
 import { matchesSearchQuery } from "@lingban/domain-models";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   dashboardBatchRunsApi,
   dashboardCatalogApi,
   dashboardMeApi,
+  dashboardProvidersApi,
   dashboardRunsApi,
 } from "../../lib/api";
 import {
@@ -23,7 +25,10 @@ import { t } from "../../lib/i18n";
 import { useDashboardRecentRecorder } from "../../lib/recent";
 import { mapRunSnapshotToInstanceRecord } from "../../lib/liveRunAdapters";
 import { dashboardRoutes } from "../../lib/routes";
-import { resolveDashboardWorkspaceView } from "../../lib/workspaceContext";
+import {
+  hasAuthoritativeDashboardWorkspaceContext,
+  resolveDashboardWorkspaceView,
+} from "../../lib/workspaceContext";
 import { useDashboardAuthStore } from "../../stores/dashboardAuthStore";
 import { useDashboardUiStore } from "../../stores/dashboardUiStore";
 
@@ -68,6 +73,38 @@ type BatchRunDraftSubmission = {
 type BatchRunEstimateRequest = BatchRunDraftSubmission & {
   signature: string;
 };
+
+type LaunchProviderOption = {
+  bindingId: string;
+  providerId: string;
+  providerLabel: string;
+  isDefault: boolean;
+  priority: number;
+  allowUserOverride: boolean;
+  allowCustomModel: boolean;
+  defaultModel: string;
+  models: string[];
+  credentialLabel: string;
+};
+
+function resolveMissingCredentialIds(error: unknown) {
+  if (!(error instanceof ApiError)) {
+    return [];
+  }
+
+  if (error.code !== "CREDENTIAL_REQUIREMENT_UNMET") {
+    return [];
+  }
+
+  const details =
+    typeof error.details === "object" && error.details !== null
+      ? (error.details as { missingCredentialIds?: unknown })
+      : null;
+
+  return Array.isArray(details?.missingCredentialIds)
+    ? details.missingCredentialIds.filter((item): item is string => typeof item === "string")
+    : [];
+}
 
 const batchImportFieldKeys: BatchImportFieldKey[] = [
   "title",
@@ -285,18 +322,9 @@ export function WorkshopsPage() {
   const [batchImportMappingDraft, setBatchImportMappingDraft] = useState<BatchImportMappingDraft>(
     () => createBatchImportMappingDraft()
   );
-  const [batchDraftRows, setBatchDraftRows] = useState<BatchDraftRow[]>([
-    createBatchDraftRow({
-      title: "Poster A",
-      pathSuffix: "poster-a",
-      contextText: "region: hk\nformat: portrait",
-    }),
-    createBatchDraftRow({
-      title: "Poster B",
-      pathSuffix: "poster-b",
-      contextText: "region: sg\nformat: square",
-    }),
-  ]);
+  const [batchDraftRows, setBatchDraftRows] = useState<BatchDraftRow[]>([createBatchDraftRow()]);
+  const [launchProviderBindingId, setLaunchProviderBindingId] = useState("__default__");
+  const [launchProviderModel, setLaunchProviderModel] = useState("");
   const currentWorkspaceId = useDashboardUiStore((state) => state.currentWorkspaceId);
   const authMode = useDashboardAuthStore((state) => state.authMode);
   const authenticated = useDashboardAuthStore((state) => state.authenticated);
@@ -306,11 +334,12 @@ export function WorkshopsPage() {
     () =>
       resolveDashboardWorkspaceView({
         selectionId: currentWorkspaceId,
-        workspaces: authMode === "required" ? authWorkspaces : undefined,
-        fallbackWorkspaceId: authCurrentWorkspace?.workspaceId,
+        workspaces: authWorkspaces.length > 0 ? authWorkspaces : undefined,
+        fallbackWorkspace: authCurrentWorkspace,
       }),
-    [authCurrentWorkspace?.workspaceId, authMode, authWorkspaces, currentWorkspaceId]
+    [authCurrentWorkspace, authMode, authWorkspaces, currentWorkspaceId]
   );
+  const workspaceDataReady = hasAuthoritativeDashboardWorkspaceContext(currentWorkspace);
   const favoritesEnabled = currentWorkspace.source === "auth";
 
   const workshopsQuery = useQuery({
@@ -326,6 +355,7 @@ export function WorkshopsPage() {
         workspaceContextKey: currentWorkspace.id,
         entrySurface: "dashboard",
       }),
+    enabled: workspaceDataReady,
     retry: false,
     staleTime: 30_000,
   });
@@ -342,6 +372,21 @@ export function WorkshopsPage() {
         workspaceContextKey: currentWorkspace.id,
         entrySurface: "dashboard",
       }),
+    enabled: workspaceDataReady,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const providerBindingsQuery = useQuery({
+    queryKey: ["dashboard", "launch-provider-bindings", currentWorkspace.selectionId, currentWorkspace.id],
+    queryFn: async () => dashboardProvidersApi.listBindings({ enabled: true }),
+    enabled: workspaceDataReady,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const providerProfilesQuery = useQuery({
+    queryKey: ["dashboard", "launch-provider-profiles", currentWorkspace.selectionId, currentWorkspace.id],
+    queryFn: async () => dashboardProvidersApi.listProviders({ enabled: true }),
+    enabled: workspaceDataReady,
     retry: false,
     staleTime: 30_000,
   });
@@ -354,6 +399,7 @@ export function WorkshopsPage() {
         return [];
       }
     },
+    enabled: workspaceDataReady,
     retry: false,
     refetchInterval: 10_000,
   });
@@ -379,7 +425,7 @@ export function WorkshopsPage() {
         return [];
       }
     },
-    enabled: Boolean(serviceId),
+    enabled: workspaceDataReady && Boolean(serviceId),
     retry: false,
     refetchInterval: 10_000,
   });
@@ -398,7 +444,7 @@ export function WorkshopsPage() {
 
       return dashboardBatchRunsApi.getBatchRun(batchJobId);
     },
-    enabled: Boolean(batchJobId),
+    enabled: workspaceDataReady && Boolean(batchJobId),
     retry: false,
     refetchInterval: 10_000,
   });
@@ -418,7 +464,7 @@ export function WorkshopsPage() {
 
       return dashboardBatchRunsApi.listBatchItems(batchJobId);
     },
-    enabled: Boolean(batchJobId),
+    enabled: workspaceDataReady && Boolean(batchJobId),
     retry: false,
     refetchInterval: 10_000,
   });
@@ -443,6 +489,9 @@ export function WorkshopsPage() {
   const catalogError = workshopsQuery.error ?? servicesQuery.error;
   const launchRunMutation = useMutation({
     mutationFn: async (targetServiceId: string) => {
+      if (!workspaceDataReady) {
+        throw new Error("Workspace context is not ready yet.");
+      }
       const template = await dashboardCatalogApi.createLaunchTemplate(targetServiceId, {
         workspaceContextKey: currentWorkspace.id,
         workspaceId:
@@ -451,7 +500,21 @@ export function WorkshopsPage() {
             : undefined,
         entrySurface: "dashboard",
       });
-      return dashboardRunsApi.createRun(template.createRunInput);
+
+      const trimmedModel = launchProviderModel.trim();
+      const shouldPinExplicitProvider = launchProviderBindingId !== "__default__" && selectedLaunchProvider;
+      const shouldOverrideModel = Boolean(trimmedModel && selectedLaunchProvider?.allowUserOverride);
+
+      return dashboardRunsApi.createRun({
+        ...template.createRunInput,
+        providerSelection:
+          shouldPinExplicitProvider || shouldOverrideModel
+            ? {
+                providerId: selectedLaunchProvider!.providerId,
+                ...(shouldOverrideModel ? { model: trimmedModel } : {}),
+              }
+            : null,
+      });
     },
     onSuccess: async () => {
       await Promise.all([
@@ -462,18 +525,23 @@ export function WorkshopsPage() {
   });
   const createBatchRunMutation = useMutation({
     mutationFn: async (input: BatchRunDraftSubmission) =>
-      dashboardBatchRunsApi.createBatchRun({
-        workspaceContextKey: currentWorkspace.id,
-        workspaceId:
-          currentWorkspace.source === "auth"
-            ? currentWorkspace.runtimeWorkspaceId
-            : undefined,
-        serviceId: input.targetServiceId,
-        entrySurface: "dashboard",
-        title: input.title,
-        items: input.items,
-        governance: input.governance,
-      }),
+      {
+        if (!workspaceDataReady) {
+          throw new Error("Workspace context is not ready yet.");
+        }
+        return dashboardBatchRunsApi.createBatchRun({
+          workspaceContextKey: currentWorkspace.id,
+          workspaceId:
+            currentWorkspace.source === "auth"
+              ? currentWorkspace.runtimeWorkspaceId
+              : undefined,
+          serviceId: input.targetServiceId,
+          entrySurface: "dashboard",
+          title: input.title,
+          items: input.items,
+          governance: input.governance,
+        });
+      },
     onSuccess: async (created, variables) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["dashboard", "batch-runs"] }),
@@ -484,17 +552,22 @@ export function WorkshopsPage() {
   });
   const estimateBatchRunMutation = useMutation({
     mutationFn: async (input: BatchRunEstimateRequest) =>
-      dashboardBatchRunsApi.estimateBatchRun({
-        workspaceContextKey: currentWorkspace.id,
-        workspaceId:
-          currentWorkspace.source === "auth"
-            ? currentWorkspace.runtimeWorkspaceId
-            : undefined,
-        serviceId: input.targetServiceId,
-        entrySurface: "dashboard",
-        items: input.items,
-        governance: input.governance,
-      }),
+      {
+        if (!workspaceDataReady) {
+          throw new Error("Workspace context is not ready yet.");
+        }
+        return dashboardBatchRunsApi.estimateBatchRun({
+          workspaceContextKey: currentWorkspace.id,
+          workspaceId:
+            currentWorkspace.source === "auth"
+              ? currentWorkspace.runtimeWorkspaceId
+              : undefined,
+          serviceId: input.targetServiceId,
+          entrySurface: "dashboard",
+          items: input.items,
+          governance: input.governance,
+        });
+      },
   });
   const validateBatchRunMutation = useMutation({
     mutationFn: async (targetBatchJobId: string) =>
@@ -678,6 +751,92 @@ export function WorkshopsPage() {
     () => visibleServices.find((item) => item.id === serviceId) ?? null,
     [serviceId, visibleServices]
   );
+  const providerProfileLookup = useMemo(
+    () => new Map((providerProfilesQuery.data ?? []).map((provider) => [provider.providerId, provider])),
+    [providerProfilesQuery.data]
+  );
+  const launchProviderOptions = useMemo<LaunchProviderOption[]>(
+    () =>
+      (providerBindingsQuery.data ?? [])
+        .map((binding) => {
+          const provider = providerProfileLookup.get(binding.providerId);
+          if (!provider || !binding.enabled || !provider.enabled) {
+            return null;
+          }
+
+          return {
+            bindingId: binding.bindingId,
+            providerId: provider.providerId,
+            providerLabel: provider.displayName,
+            isDefault: binding.isDefault,
+            priority: binding.priority,
+            allowUserOverride: binding.allowUserOverride,
+            allowCustomModel: provider.allowCustomModel,
+            defaultModel: provider.defaultModel,
+            models: provider.models.filter((item) => item.enabled).map((item) => item.model),
+            credentialLabel: binding.credentialId,
+          } satisfies LaunchProviderOption;
+        })
+        .filter((item): item is LaunchProviderOption => item != null)
+        .sort((left, right) => {
+          if (left.isDefault !== right.isDefault) {
+            return left.isDefault ? -1 : 1;
+          }
+          if (left.priority !== right.priority) {
+            return left.priority - right.priority;
+          }
+          return left.providerLabel.localeCompare(right.providerLabel);
+        }),
+    [providerBindingsQuery.data, providerProfileLookup]
+  );
+  const defaultLaunchProvider = useMemo(
+    () => launchProviderOptions.find((option) => option.isDefault) ?? launchProviderOptions[0] ?? null,
+    [launchProviderOptions]
+  );
+  const selectedLaunchProvider = useMemo(() => {
+    if (launchProviderBindingId === "__default__") {
+      return defaultLaunchProvider;
+    }
+
+    return launchProviderOptions.find((option) => option.bindingId === launchProviderBindingId) ?? null;
+  }, [defaultLaunchProvider, launchProviderBindingId, launchProviderOptions]);
+  const launchProviderSelectionSummary = useMemo(() => {
+    if (!selectedLaunchProvider) {
+      return null;
+    }
+
+    const allowedModels =
+      selectedLaunchProvider.models.length > 0
+        ? selectedLaunchProvider.models.join(", ")
+        : selectedLaunchProvider.defaultModel;
+    return t(lang, {
+      zh: `当前路由：${selectedLaunchProvider.providerLabel} / 默认模型 ${selectedLaunchProvider.defaultModel} / 优先级 ${selectedLaunchProvider.priority} / 可选模型 ${allowedModels}`,
+      en: `Current route: ${selectedLaunchProvider.providerLabel} / default model ${selectedLaunchProvider.defaultModel} / priority ${selectedLaunchProvider.priority} / allowed models ${allowedModels}`,
+    });
+  }, [lang, selectedLaunchProvider]);
+  const launchProviderOverrideHelp = useMemo(() => {
+    if (!selectedLaunchProvider || !selectedLaunchProvider.allowUserOverride) {
+      return null;
+    }
+
+    if (selectedLaunchProvider.allowCustomModel) {
+      return t(lang, {
+        zh: "该路由允许直接输入任意模型名；留空则继续使用默认模型。",
+        en: "This route accepts a custom model name. Leave it blank to use the default model.",
+      });
+    }
+
+    return t(lang, {
+      zh: `该路由仅允许以下模型：${selectedLaunchProvider.models.join(", ") || selectedLaunchProvider.defaultModel}`,
+      en: `This route only allows these models: ${selectedLaunchProvider.models.join(", ") || selectedLaunchProvider.defaultModel}`,
+    });
+  }, [lang, selectedLaunchProvider]);
+  const launchMissingCredentialIds = resolveMissingCredentialIds(launchRunMutation.error);
+
+  useEffect(() => {
+    setLaunchProviderBindingId("__default__");
+    setLaunchProviderModel("");
+  }, [currentWorkspace.id, selectedService?.id]);
 
   const selectedWorkshop = useMemo(() => {
     if (workshopId) {
@@ -760,6 +919,15 @@ export function WorkshopsPage() {
   );
   const batchDraftValidationErrors = useMemo(() => {
     const errors: string[] = [];
+    if (normalizedBatchDraftRows.length === 0) {
+      errors.push(
+        t(lang, {
+          zh: "请先新增至少一条批次行，再创建批次草稿。",
+          en: "Add at least one batch row before creating a batch draft.",
+        })
+      );
+    }
+
     const missingTitleRows = normalizedBatchDraftRows
       .map((row, index) => (!row.title ? index + 1 : null))
       .filter((value): value is number => value != null);
@@ -1182,10 +1350,15 @@ export function WorkshopsPage() {
             ))}
           </div>
           <div className="section-note">
-            {t(lang, {
-              zh: `当前命中 ${filteredWorkshops.length} 个工坊 / ${filteredServices.length} 个服务。工坊页只回答三件事：该选哪一类工坊、当前服务需要什么权限、启动后会把用户带到哪里。`,
-              en: `Matched ${filteredWorkshops.length} workshops / ${filteredServices.length} services. The workshop page answers three questions: which workshop to choose, which permissions the service needs, and where the user lands after launch.`,
-            })}
+            {workspaceDataReady
+              ? t(lang, {
+                  zh: `当前命中 ${filteredWorkshops.length} 个工坊 / ${filteredServices.length} 个服务。工坊页只回答三件事：该选哪一类工坊、当前服务需要什么权限、启动后会把用户带到哪里。`,
+                  en: `Matched ${filteredWorkshops.length} workshops / ${filteredServices.length} services. The workshop page answers three questions: which workshop to choose, which permissions the service needs, and where the user lands after launch.`,
+                })
+              : t(lang, {
+                  zh: "正在等待当前工作区上下文恢复。工坊页在此期间不会再用前端占位 workspace 去请求正式目录。",
+                  en: "Waiting for the current workspace context to recover. The workshop page stays paused instead of querying the formal catalog with a placeholder workspace.",
+                })}
           </div>
           {catalogError ? (
             <div className="section-note">
@@ -1280,6 +1453,74 @@ export function WorkshopsPage() {
                 <div className="file-name">{t(lang, { zh: "目标路径", en: "Target Path" })}</div>
                 <div className="route-code">{selectedService.targetPath}</div>
               </div>
+              <div className="detail-item">
+                <div className="file-name">{t(lang, { zh: "Provider 路由", en: "Provider route" })}</div>
+                {launchProviderOptions.length > 0 ? (
+                  <>
+                    <label className="fake-input">
+                      <select
+                        className="search-inline-input"
+                        value={launchProviderBindingId}
+                        onChange={(event) => setLaunchProviderBindingId(event.target.value)}
+                      >
+                        <option value="__default__">
+                          {t(lang, {
+                            zh: defaultLaunchProvider
+                              ? `使用工作区默认路由 (${defaultLaunchProvider.providerLabel})`
+                              : "使用工作区默认路由",
+                            en: defaultLaunchProvider
+                              ? `Use workspace default (${defaultLaunchProvider.providerLabel})`
+                              : "Use workspace default",
+                          })}
+                        </option>
+                        {launchProviderOptions.map((option) => (
+                          <option key={option.bindingId} value={option.bindingId}>
+                            {option.providerLabel}
+                            {option.isDefault ? " / default" : ""}
+                            {` / P${option.priority}`}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {launchProviderSelectionSummary ? (
+                      <div className="meta">{launchProviderSelectionSummary}</div>
+                    ) : null}
+                    {selectedLaunchProvider?.allowUserOverride ? (
+                      <>
+                        <label className="fake-input" style={{ marginTop: "10px" }}>
+                          <input
+                            className="search-inline-input"
+                            type="text"
+                            value={launchProviderModel}
+                            onChange={(event) => setLaunchProviderModel(event.target.value)}
+                            placeholder={t(lang, {
+                              zh: "留空使用默认模型；填写后按该模型启动",
+                              en: "Leave blank to use the default model; fill in a model to override",
+                            })}
+                          />
+                        </label>
+                        {launchProviderOverrideHelp ? (
+                          <div className="meta">{launchProviderOverrideHelp}</div>
+                        ) : null}
+                      </>
+                    ) : (
+                      <div className="meta">
+                        {t(lang, {
+                          zh: "当前路由锁定默认模型，启动时不会接受模型覆盖。",
+                          en: "This route pins the default model and does not accept model override.",
+                        })}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="meta">
+                    {t(lang, {
+                      zh: "当前工作区尚未绑定任何 Provider。实例会继续按既有默认运行时配置启动。",
+                      en: "No provider binding is configured for this workspace yet. The run will use the existing default runtime configuration.",
+                    })}
+                  </div>
+                )}
+              </div>
               {selectedWorkshop && favoritesEnabled ? (
                 <div className="detail-item">
                   <div className="file-name">
@@ -1344,7 +1585,25 @@ export function WorkshopsPage() {
                 </button>
               </div>
               {launchRunMutation.error instanceof Error ? (
-                <div className="section-note">{launchRunMutation.error.message}</div>
+                launchMissingCredentialIds.length > 0 ? (
+                  <>
+                    <div className="section-note">
+                      {t(lang, {
+                        zh: "当前服务缺少必需凭证。先在治理链路中补齐下列凭证，再重新启动实例。",
+                        en: "This service is missing required credentials. Complete the following credential bindings before launching again.",
+                      })}
+                    </div>
+                    <div className="pill-row">
+                      {launchMissingCredentialIds.map((credentialId) => (
+                        <span className="path-chip" key={credentialId}>
+                          {credentialId}
+                        </span>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <div className="section-note">{launchRunMutation.error.message}</div>
+                )
               ) : null}
               <div className="detail-item">
                 <div className="file-name">{t(lang, { zh: "批量启动台", en: "Batch Launchpad" })}</div>
@@ -1811,6 +2070,16 @@ export function WorkshopsPage() {
                     en: "Each row creates an independent instance. Path suffixes append under the service target root, and context fields use one `key: value` line each.",
                   })}
                 </div>
+                {batchDraftRows.length === 0 ? (
+                  <div className="detail-item">
+                    <div className="section-note">
+                      {t(lang, {
+                        zh: "当前还没有批次行。先新增一行，再填写标题、路径后缀和上下文。",
+                        en: "No batch rows yet. Add a row first, then fill in the title, path suffix, and context.",
+                      })}
+                    </div>
+                  </div>
+                ) : null}
                 {batchDraftRows.map((row, index) => (
                   <div className="detail-item" key={row.rowId}>
                     <div className="instance-head">
@@ -1836,8 +2105,8 @@ export function WorkshopsPage() {
                         value={row.title}
                         onChange={(event) => updateBatchDraftRow(row.rowId, "title", event.target.value)}
                         placeholder={t(lang, {
-                          zh: "实例标题，例如：Poster A",
-                          en: "Run title, for example Poster A",
+                          zh: "实例标题",
+                          en: "Run title",
                         })}
                       />
                     </label>
@@ -1850,8 +2119,8 @@ export function WorkshopsPage() {
                           updateBatchDraftRow(row.rowId, "pathSuffix", event.target.value)
                         }
                         placeholder={t(lang, {
-                          zh: "路径后缀，例如：poster-a",
-                          en: "Path suffix, for example poster-a",
+                          zh: "路径后缀",
+                          en: "Path suffix",
                         })}
                       />
                     </label>
@@ -1872,8 +2141,8 @@ export function WorkshopsPage() {
                           updateBatchDraftRow(row.rowId, "contextText", event.target.value)
                         }
                         placeholder={t(lang, {
-                          zh: "context 示例：region: hk",
-                          en: "Context example: region: hk",
+                          zh: "上下文字段，按 key: value 每行填写",
+                          en: "Context fields, one key: value pair per line",
                         })}
                       />
                     </label>

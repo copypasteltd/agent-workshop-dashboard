@@ -26,7 +26,10 @@ import { useDashboardRecentRecorder } from "../../lib/recent";
 import { isLiveRunId, mapRunSnapshotToInstanceRecord } from "../../lib/liveRunAdapters";
 import { dashboardRoutes, isInstanceTab } from "../../lib/routes";
 import { useDashboardRunStream } from "../../lib/runStream";
-import { resolveDashboardWorkspaceView } from "../../lib/workspaceContext";
+import {
+  hasAuthoritativeDashboardWorkspaceContext,
+  resolveDashboardWorkspaceView,
+} from "../../lib/workspaceContext";
 import { useDashboardAuthStore } from "../../stores/dashboardAuthStore";
 import { useDashboardUiStore } from "../../stores/dashboardUiStore";
 
@@ -84,6 +87,51 @@ function getUnreadCount(instance: InstanceRecord) {
   }
 
   return count;
+}
+
+function formatRuntimeTimestamp(lang: "zh" | "en", value: string | null) {
+  if (!value) {
+    return t(lang, { zh: "未上报", en: "Not reported" });
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleString(lang === "zh" ? "zh-CN" : "en-US", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+function formatRuntimeLaunchMode(
+  lang: "zh" | "en",
+  value: InstanceRecord["runtime"]["launchMode"]
+) {
+  switch (value) {
+    case "local-process":
+      return t(lang, { zh: "宿主进程", en: "Host process" });
+    case "docker":
+      return t(lang, { zh: "容器", en: "Container" });
+    default:
+      return t(lang, { zh: "未上报", en: "Not reported" });
+  }
+}
+
+function hasRuntimeTelemetry(runtime: InstanceRecord["runtime"]) {
+  return (
+    runtime.launchMode !== null ||
+    runtime.containerName !== null ||
+    runtime.startedAt !== null ||
+    runtime.readyAt !== null ||
+    runtime.finishedAt !== null ||
+    runtime.exitCode !== null ||
+    runtime.exitSignal !== null
+  );
 }
 
 function formatBillingOccurredAt(lang: "zh" | "en", value: string | null) {
@@ -855,8 +903,8 @@ function InstanceTabPanel({ instance, liveMode }: { instance: InstanceRecord; li
                 {t(
                   lang,
                   selectedFile.preview ?? {
-                    zh: "当前为静态参照数据。正式接入 live run 后会在这里展示真实文本预览。",
-                    en: "This is static reference data. Live runs will show real text previews here.",
+                    zh: "当前文件暂无可用预览内容，请直接下载或等待后端返回可内联预览的数据。",
+                    en: "Inline preview is currently unavailable for this file. Download it directly or wait for the backend to return previewable content.",
                   }
                 )}
               </pre>
@@ -868,31 +916,94 @@ function InstanceTabPanel({ instance, liveMode }: { instance: InstanceRecord; li
   }
 
   if (instanceTab === "runtime") {
+    const runtimeRows = [
+      {
+        key: "launch-mode",
+        label: t(lang, { zh: "启动模式", en: "Launch mode" }),
+        value: formatRuntimeLaunchMode(lang, instance.runtime.launchMode),
+      },
+      {
+        key: "container-name",
+        label: t(lang, { zh: "容器名", en: "Container name" }),
+        value: instance.runtime.containerName ?? t(lang, { zh: "未上报", en: "Not reported" }),
+      },
+      {
+        key: "provider-label",
+        label: t(lang, { zh: "Provider", en: "Provider" }),
+        value: instance.runtime.providerLabel ?? t(lang, { zh: "未解析", en: "Not resolved" }),
+      },
+      {
+        key: "provider-model",
+        label: t(lang, { zh: "模型", en: "Model" }),
+        value: instance.runtime.providerModel ?? t(lang, { zh: "未上报", en: "Not reported" }),
+      },
+      {
+        key: "provider-base-url",
+        label: t(lang, { zh: "上游 Base URL", en: "Upstream base URL" }),
+        value: instance.runtime.providerBaseUrl ?? t(lang, { zh: "未上报", en: "Not reported" }),
+      },
+      {
+        key: "started-at",
+        label: t(lang, { zh: "启动时间", en: "Started at" }),
+        value: formatRuntimeTimestamp(lang, instance.runtime.startedAt),
+      },
+      {
+        key: "ready-at",
+        label: t(lang, { zh: "就绪时间", en: "Ready at" }),
+        value: formatRuntimeTimestamp(lang, instance.runtime.readyAt),
+      },
+      {
+        key: "finished-at",
+        label: t(lang, { zh: "结束时间", en: "Finished at" }),
+        value: formatRuntimeTimestamp(lang, instance.runtime.finishedAt),
+      },
+      {
+        key: "exit-code",
+        label: t(lang, { zh: "退出码", en: "Exit code" }),
+        value:
+          instance.runtime.exitCode !== null
+            ? String(instance.runtime.exitCode)
+            : t(lang, { zh: "未上报", en: "Not reported" }),
+      },
+      {
+        key: "exit-signal",
+        label: t(lang, { zh: "退出信号", en: "Exit signal" }),
+        value: instance.runtime.exitSignal ?? t(lang, { zh: "未上报", en: "Not reported" }),
+      },
+    ];
+    const runtimeReady = hasRuntimeTelemetry(instance.runtime);
+
     return (
       <div className="detail-body">
         <div className="section-head">
           <div>
             <div className="eyebrow">{t(lang, { zh: "运行", en: "Runtime" })}</div>
-            <div className="tab-title">{t(lang, { zh: "容器与挂载", en: "Container and mounts" })}</div>
+            <div className="tab-title">
+              {t(lang, { zh: "正式运行元数据", en: "Formal runtime metadata" })}
+            </div>
           </div>
-          <span className="pill success">{instance.runtime.container}</span>
+          <span className={`pill ${runtimeReady ? "success" : "warn"}`}>
+            {runtimeReady
+              ? t(lang, { zh: "已接入", en: "Available" })
+              : t(lang, { zh: "等待上报", en: "Pending" })}
+          </span>
         </div>
-        <div className="detail-item">
-          <div className="file-name">{instance.runtime.image}</div>
-          <div className="meta">
-            {t(lang, { zh: "当前实例使用的标准镜像。", en: "The standard image used by this instance." })}
+        {!runtimeReady ? (
+          <div className="panel-empty">
+            {t(lang, {
+              zh: "当前实例尚未上报正式运行元数据。该页不会再拼接容器镜像或挂载占位信息，只有后端写入真实字段后才会展示。",
+              en: "This run has not reported formal runtime metadata yet. The dashboard keeps this view empty until the backend writes real runtime fields.",
+            })}
           </div>
-        </div>
-        {instance.runtime.mounts.map((item) => (
-          <div className="detail-item" key={t(lang, item)}>
-            <div className="file-name">{t(lang, item)}</div>
-          </div>
-        ))}
-        {instance.runtime.notes.map((item) => (
-          <div className="detail-item" key={t(lang, item)}>
-            <div className="meta">{t(lang, item)}</div>
-          </div>
-        ))}
+        ) : null}
+        {runtimeReady
+          ? runtimeRows.map((item) => (
+              <div className="detail-item" key={item.key}>
+                <div className="file-name">{item.label}</div>
+                <div className="meta mono">{item.value}</div>
+              </div>
+            ))
+          : null}
       </div>
     );
   }
@@ -1207,11 +1318,12 @@ export function InstancesPage() {
     () =>
       resolveDashboardWorkspaceView({
         selectionId: currentWorkspaceId,
-        workspaces: authMode === "required" ? authWorkspaces : undefined,
-        fallbackWorkspaceId: authCurrentWorkspace?.workspaceId,
+        workspaces: authWorkspaces.length > 0 ? authWorkspaces : undefined,
+        fallbackWorkspace: authCurrentWorkspace,
       }),
-    [authCurrentWorkspace?.workspaceId, authMode, authWorkspaces, currentWorkspaceId]
+    [authCurrentWorkspace, authMode, authWorkspaces, currentWorkspaceId]
   );
+  const workspaceDataReady = hasAuthoritativeDashboardWorkspaceContext(currentWorkspace);
 
   const runsQuery = useQuery({
     queryKey: ["dashboard", "runs"],
@@ -1222,6 +1334,7 @@ export function InstancesPage() {
         return [];
       }
     },
+    enabled: workspaceDataReady,
     refetchInterval: 10_000,
   });
 
@@ -1249,6 +1362,7 @@ export function InstancesPage() {
         return [];
       }
     },
+    enabled: workspaceDataReady,
     refetchInterval: 10_000,
     retry: false,
   });
@@ -1262,6 +1376,7 @@ export function InstancesPage() {
         return null;
       }
     },
+    enabled: workspaceDataReady,
     refetchInterval: 10_000,
     retry: false,
   });
@@ -1930,10 +2045,15 @@ export function InstancesPage() {
           <span className="path-chip">{t(lang, currentWorkspace.name)}</span>
         </div>
         <div className="section-note">
-          {t(lang, {
-            zh: `当前工作区根路径：${currentWorkspace.root}。筛选后保留 ${filteredInstances.length} 个实例；多实例切换保留当前输入草稿，右侧详情保持同一实例上下文。`,
-            en: `Current workspace root: ${currentWorkspace.root}. Filters keep ${filteredInstances.length} runs; switching instances preserves the input draft while the right detail pane keeps the same run context.`,
-          })}
+          {workspaceDataReady
+            ? t(lang, {
+                zh: `当前工作区根路径：${currentWorkspace.root}。筛选后保留 ${filteredInstances.length} 个实例；多实例切换保留当前输入草稿，右侧详情保持同一实例上下文。`,
+                en: `Current workspace root: ${currentWorkspace.root}. Filters keep ${filteredInstances.length} runs; switching instances preserves the input draft while the right detail pane keeps the same run context.`,
+              })
+            : t(lang, {
+                zh: "正在等待当前工作区上下文恢复。实例列表在此期间不会再用前端占位 workspace 去请求正式后端。",
+                en: "Waiting for the current workspace context to recover. The instance list stays paused instead of querying the formal backend with a placeholder workspace.",
+              })}
         </div>
         {routeInstanceOutOfScope ? (
           <div className="section-note">
@@ -1943,7 +2063,7 @@ export function InstancesPage() {
             })}
           </div>
         ) : null}
-        {instanceDataMode === "empty" ? (
+        {workspaceDataReady && instanceDataMode === "empty" ? (
           <div className="section-note">
             {t(lang, {
               zh: "当前工作区还没有真实实例记录。认证工作区不会再混入样例实例，实例列表会在首个 run 建立后直接切到 live 数据主链。",

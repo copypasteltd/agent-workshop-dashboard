@@ -1,5 +1,7 @@
-import type { WorkspaceSummary } from "@lingban/contracts";
+import type { WorkspaceContextSummary, WorkspaceSummary } from "@lingban/contracts";
 import { l, type LocalizedString } from "./i18n";
+
+export type DashboardWorkspaceBootstrap = WorkspaceSummary | WorkspaceContextSummary;
 
 export type DashboardWorkspaceView = {
   id: string;
@@ -10,12 +12,18 @@ export type DashboardWorkspaceView = {
   contextKey: string;
   selectionId: string;
   runtimeWorkspaceId: string;
-  source: "static" | "auth";
+  source: "static" | "public" | "auth";
   slug: string | null;
   role: WorkspaceSummary["role"] | null;
   membershipStatus: WorkspaceSummary["membershipStatus"] | null;
   authType: WorkspaceSummary["type"] | null;
 };
+
+export function hasAuthoritativeDashboardWorkspaceContext(
+  workspace: DashboardWorkspaceView
+) {
+  return workspace.source === "auth" || workspace.source === "public";
+}
 
 function normalizeText(value?: string | null) {
   return (value ?? "").trim().toLowerCase();
@@ -49,36 +57,20 @@ function workspaceRoleLabel(role: WorkspaceSummary["role"]): LocalizedString {
   }
 }
 
-function previewWorkspaceName(contextKey: string): LocalizedString {
-  switch (contextKey) {
-    case "personal":
-      return l("个人空间", "Personal Workspace");
-    case "harbor-finance":
-      return l("华港财务组", "Harbor Finance Team");
-    case "brand-lab":
-      return l("品牌内容组", "Brand Content Team");
-    default:
-      return l("预览工作区", "Preview Workspace");
-  }
+function previewWorkspaceName(): LocalizedString {
+  return l("未连接工作区", "Workspace unavailable");
 }
 
-function previewWorkspaceType(contextKey: string) {
-  return contextKey === "personal"
-    ? workspaceTypeLabel("personal")
-    : workspaceTypeLabel("enterprise");
+function previewWorkspaceType(): LocalizedString {
+  return l("未连接", "Unavailable");
 }
 
 function previewWorkspaceMeta(): LocalizedString {
-  return l(
-    "预览工作区 / 登录后加载真实绑定",
-    "Preview workspace / Sign in to load live bindings"
-  );
+  return l("等待会话或目录上下文", "Waiting for session or catalog context");
 }
 
-function buildPreviewWorkspaceRoot(contextKey: string) {
-  const normalized =
-    normalizeText(contextKey).replace(/[^a-z0-9-]+/g, "-") || "preview";
-  return `/workspace/${normalized}/`;
+function buildPreviewWorkspaceRoot() {
+  return "/workspace/";
 }
 
 function resolveWorkspaceRoot(workspace: WorkspaceSummary) {
@@ -98,6 +90,29 @@ function resolveAuthWorkspaceContextKey(workspace: WorkspaceSummary) {
     name: workspace.name,
     type: workspace.type,
   });
+}
+
+function isCatalogWorkspaceContext(
+  workspace: DashboardWorkspaceBootstrap
+): workspace is WorkspaceContextSummary {
+  return "runtimeWorkspaceId" in workspace && "displayName" in workspace;
+}
+
+function matchesWorkspaceSelection(
+  workspace: DashboardWorkspaceBootstrap,
+  selectionId: string
+) {
+  if (isCatalogWorkspaceContext(workspace)) {
+    return (
+      workspace.contextKey === selectionId ||
+      workspace.runtimeWorkspaceId === selectionId
+    );
+  }
+
+  return (
+    workspace.workspaceId === selectionId ||
+    resolveAuthWorkspaceContextKey(workspace) === selectionId
+  );
 }
 
 export function inferWorkspaceContextKey(input: {
@@ -135,26 +150,43 @@ export function inferWorkspaceContextKey(input: {
 export function buildPreviewDashboardWorkspaceView(
   selectionId?: string | null
 ): DashboardWorkspaceView {
-  const contextKey = inferWorkspaceContextKey({
-    workspaceId: selectionId,
-    slug: selectionId,
-    name: selectionId,
-  });
-  const effectiveSelectionId = selectionId?.trim() || contextKey;
+  const normalizedSelection =
+    normalizeText(selectionId).replace(/[^a-z0-9-]+/g, "-") || "workspace";
+
   return {
-    id: contextKey,
-    name: previewWorkspaceName(contextKey),
-    type: previewWorkspaceType(contextKey),
+    id: normalizedSelection,
+    name: previewWorkspaceName(),
+    type: previewWorkspaceType(),
     meta: previewWorkspaceMeta(),
-    root: buildPreviewWorkspaceRoot(contextKey),
-    contextKey,
-    selectionId: effectiveSelectionId,
-    runtimeWorkspaceId: effectiveSelectionId,
+    root: buildPreviewWorkspaceRoot(),
+    contextKey: normalizedSelection,
+    selectionId: selectionId?.trim() || normalizedSelection,
+    runtimeWorkspaceId: selectionId?.trim() || normalizedSelection,
     source: "static",
     slug: null,
     role: null,
     membershipStatus: null,
     authType: null,
+  };
+}
+
+export function buildDashboardWorkspaceViewFromCatalogContext(
+  workspace: WorkspaceContextSummary
+): DashboardWorkspaceView {
+  return {
+    id: workspace.contextKey,
+    contextKey: workspace.contextKey,
+    name: workspace.displayName,
+    type: workspaceTypeLabel(workspace.type),
+    meta: workspace.meta,
+    root: workspace.root,
+    selectionId: workspace.contextKey,
+    runtimeWorkspaceId: workspace.runtimeWorkspaceId,
+    source: "public",
+    slug: workspace.contextKey,
+    role: null,
+    membershipStatus: null,
+    authType: workspace.type,
   };
 }
 
@@ -185,9 +217,19 @@ export function buildDashboardWorkspaceViewFromAuth(
   };
 }
 
-export function listDashboardWorkspaceViews(workspaces?: WorkspaceSummary[]) {
+function buildDashboardWorkspaceView(
+  workspace: DashboardWorkspaceBootstrap
+): DashboardWorkspaceView {
+  return isCatalogWorkspaceContext(workspace)
+    ? buildDashboardWorkspaceViewFromCatalogContext(workspace)
+    : buildDashboardWorkspaceViewFromAuth(workspace);
+}
+
+export function listDashboardWorkspaceViews(
+  workspaces?: DashboardWorkspaceBootstrap[]
+) {
   if (workspaces && workspaces.length > 0) {
-    return workspaces.map(buildDashboardWorkspaceViewFromAuth);
+    return workspaces.map(buildDashboardWorkspaceView);
   }
 
   return [];
@@ -195,39 +237,27 @@ export function listDashboardWorkspaceViews(workspaces?: WorkspaceSummary[]) {
 
 export function resolveDashboardWorkspaceView(input: {
   selectionId?: string | null;
-  workspaces?: WorkspaceSummary[];
-  fallbackWorkspaceId?: string | null;
+  workspaces?: DashboardWorkspaceBootstrap[];
+  fallbackWorkspace?: DashboardWorkspaceBootstrap | null;
 }) {
-  const { selectionId, workspaces, fallbackWorkspaceId } = input;
+  const { selectionId, workspaces, fallbackWorkspace } = input;
 
   if (workspaces && workspaces.length > 0) {
     const exactMatch = selectionId
-      ? workspaces.find((workspace) => workspace.workspaceId === selectionId)
-      : null;
-    if (exactMatch) {
-      return buildDashboardWorkspaceViewFromAuth(exactMatch);
-    }
-
-    const contextMatch = selectionId
-      ? workspaces.find(
-          (workspace) => resolveAuthWorkspaceContextKey(workspace) === selectionId
+      ? workspaces.find((workspace) =>
+          matchesWorkspaceSelection(workspace, selectionId)
         )
       : null;
-    if (contextMatch) {
-      return buildDashboardWorkspaceViewFromAuth(contextMatch);
+    if (exactMatch) {
+      return buildDashboardWorkspaceView(exactMatch);
     }
 
-    const fallbackMatch = fallbackWorkspaceId
-      ? workspaces.find((workspace) => workspace.workspaceId === fallbackWorkspaceId)
-      : null;
-    if (fallbackMatch) {
-      return buildDashboardWorkspaceViewFromAuth(fallbackMatch);
+    if (fallbackWorkspace) {
+      return buildDashboardWorkspaceView(fallbackWorkspace);
     }
 
-    return buildDashboardWorkspaceViewFromAuth(workspaces[0]);
+    return buildDashboardWorkspaceView(workspaces[0]);
   }
 
-  return buildPreviewDashboardWorkspaceView(
-    selectionId ?? fallbackWorkspaceId ?? "harbor-finance"
-  );
+  return buildPreviewDashboardWorkspaceView(selectionId ?? null);
 }

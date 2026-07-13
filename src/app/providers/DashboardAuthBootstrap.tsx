@@ -1,5 +1,8 @@
 import type { PropsWithChildren } from "react";
-import type { AuthSessionEnvelope } from "@lingban/contracts";
+import type {
+  AuthDisabledSessionBootstrap,
+  AuthSessionEnvelope,
+} from "@lingban/contracts";
 import { useEffect, useRef } from "react";
 import { dashboardApiBaseUrl, dashboardAuthFetch } from "../../lib/api";
 import { inferWorkspaceContextKey } from "../../lib/workspaceContext";
@@ -17,6 +20,19 @@ function isAuthDisabledPayload(value: unknown): value is { authMode: "disabled" 
   );
 }
 
+function isAuthDisabledSessionBootstrap(
+  value: unknown
+): value is AuthDisabledSessionBootstrap {
+  return (
+    isAuthDisabledPayload(value) &&
+    typeof value === "object" &&
+    value !== null &&
+    "currentWorkspace" in value &&
+    "workspaces" in value &&
+    Array.isArray((value as { workspaces?: unknown }).workspaces)
+  );
+}
+
 function isAuthSessionEnvelope(value: unknown): value is AuthSessionEnvelope {
   return (
     typeof value === "object" &&
@@ -28,25 +44,54 @@ function isAuthSessionEnvelope(value: unknown): value is AuthSessionEnvelope {
   );
 }
 
-function syncWorkspaceSelection(envelope: AuthSessionEnvelope) {
+type BootstrapWorkspace =
+  | AuthSessionEnvelope["currentWorkspace"]
+  | AuthDisabledSessionBootstrap["currentWorkspace"];
+
+function isPublicWorkspace(
+  workspace: BootstrapWorkspace
+): workspace is AuthDisabledSessionBootstrap["currentWorkspace"] {
+  return "runtimeWorkspaceId" in workspace && "displayName" in workspace;
+}
+
+function matchesWorkspaceSelection(workspace: BootstrapWorkspace, selectionId: string) {
+  if (isPublicWorkspace(workspace)) {
+    return (
+      workspace.contextKey === selectionId ||
+      workspace.runtimeWorkspaceId === selectionId
+    );
+  }
+
+  return (
+    workspace.workspaceId === selectionId ||
+    workspace.contextKey === selectionId ||
+    inferWorkspaceContextKey({
+      workspaceId: workspace.workspaceId,
+      slug: workspace.slug,
+      name: workspace.name,
+      type: workspace.type,
+    }) === selectionId
+  );
+}
+
+function toWorkspaceSelectionId(workspace: BootstrapWorkspace) {
+  return isPublicWorkspace(workspace) ? workspace.contextKey : workspace.workspaceId;
+}
+
+function syncWorkspaceSelection(
+  envelope: AuthSessionEnvelope | AuthDisabledSessionBootstrap
+) {
   const uiStore = useDashboardUiStore.getState();
   const storedSelectionId = uiStore.currentWorkspaceId;
 
   const matchedWorkspace =
     envelope.workspaces.find(
-      (workspace) =>
-        workspace.workspaceId === storedSelectionId ||
-        workspace.contextKey === storedSelectionId ||
-        inferWorkspaceContextKey({
-          workspaceId: workspace.workspaceId,
-          slug: workspace.slug,
-          name: workspace.name,
-          type: workspace.type,
-        }) === storedSelectionId
+      (workspace) => matchesWorkspaceSelection(workspace, storedSelectionId)
     ) ?? envelope.currentWorkspace;
 
-  if (matchedWorkspace.workspaceId !== storedSelectionId) {
-    uiStore.setCurrentWorkspaceId(matchedWorkspace.workspaceId);
+  const nextSelectionId = toWorkspaceSelectionId(matchedWorkspace);
+  if (nextSelectionId !== storedSelectionId) {
+    uiStore.setCurrentWorkspaceId(nextSelectionId);
   }
 }
 
@@ -79,6 +124,12 @@ export function DashboardAuthBootstrap({ children }: PropsWithChildren) {
         const payload = (await response.json().catch(() => null)) as unknown;
 
         if (cancelled) {
+          return;
+        }
+
+        if (response.ok && isAuthDisabledSessionBootstrap(payload)) {
+          authStore.applyPublicWorkspaceBootstrap(payload);
+          syncWorkspaceSelection(payload);
           return;
         }
 

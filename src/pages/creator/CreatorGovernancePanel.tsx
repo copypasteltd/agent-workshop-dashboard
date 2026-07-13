@@ -937,7 +937,10 @@ export function CreatorGovernancePanel({
   const currentUserId = useDashboardAuthStore((state) => state.user?.userId ?? null);
   const queryClient = useQueryClient();
   const authReady = authMode === "required" && authenticated;
-  const currentWorkspaceRole = currentWorkspace?.role ?? null;
+  const currentWorkspaceRole =
+    authReady && currentWorkspace && "role" in currentWorkspace
+      ? currentWorkspace.role
+      : null;
   const canManageMembers = canManageWorkspaceMembers(currentWorkspaceRole);
   const manageableRoles = allowedManagedWorkspaceRoles(currentWorkspaceRole);
   const [query, setQuery] = useState("");
@@ -1096,17 +1099,20 @@ export function CreatorGovernancePanel({
       workspaceContextKey,
     ],
     queryFn: async () =>
-      dashboardCreatorApi.getGovernanceSectionSummary(
-        packageId,
-        section === "audit" ? "audit" : "cost",
-        {
-          workspaceContextKey,
-        }
-      ),
-    enabled: authReady && (section === "audit" || section === "cost"),
+      dashboardCreatorApi.getGovernanceSectionSummary(packageId, section, {
+        workspaceContextKey,
+      }),
+    enabled: authReady,
     retry: false,
     staleTime: 30_000,
   });
+  const governanceSummaryMetaFragment = useMemo(() => {
+    if (!governanceSummaryQuery.data) {
+      return null;
+    }
+
+    return toGovernanceMetaFragment(governanceSummaryQuery.data);
+  }, [governanceSummaryQuery.data]);
   const auditExportsQuery = useQuery({
     queryKey: [
       "dashboard",
@@ -1926,7 +1932,7 @@ export function CreatorGovernancePanel({
   );
   const memberRows = useMemo(() => {
     if (!membersQuery.data) {
-      return meta.rows;
+      return governanceSummaryMetaFragment?.rows ?? [];
     }
 
     return filteredWorkspaceMembers.map<GovernanceRow>((member) => ({
@@ -1945,7 +1951,7 @@ export function CreatorGovernancePanel({
         ]),
       ],
     }));
-  }, [filteredWorkspaceMembers, membersQuery.data, meta.rows, workspaceLabel]);
+  }, [filteredWorkspaceMembers, governanceSummaryMetaFragment?.rows, membersQuery.data, workspaceLabel]);
   const invitationRows = useMemo(
     () =>
       filteredWorkspaceInvitations.map<GovernanceRow>((invitation) => ({
@@ -1970,7 +1976,7 @@ export function CreatorGovernancePanel({
   );
   const memberMetrics = useMemo(() => {
     if (!membersQuery.data) {
-      return meta.metrics;
+      return governanceSummaryMetaFragment?.metrics ?? [];
     }
 
     const activeMembers = workspaceMembers.filter((item) => item.membership.status === "active").length;
@@ -1998,7 +2004,13 @@ export function CreatorGovernancePanel({
           : l("当前角色只能查看成员列表，不能管理邀请。", "The current role can read members but cannot manage invitations."),
       },
     ] satisfies GovernanceMetric[];
-  }, [canManageMembers, membersQuery.data, meta.metrics, workspaceInvitations, workspaceMembers]);
+  }, [
+    canManageMembers,
+    governanceSummaryMetaFragment?.metrics,
+    membersQuery.data,
+    workspaceInvitations,
+    workspaceMembers,
+  ]);
 
   const memberHeaders: [LocalizedString, LocalizedString, LocalizedString, LocalizedString] = [
     l("成员", "Member"),
@@ -2015,7 +2027,7 @@ export function CreatorGovernancePanel({
 
   const credentialRows = useMemo(() => {
     if (!credentialsQuery.data) {
-      return meta.rows;
+      return governanceSummaryMetaFragment?.rows ?? [];
     }
 
     return credentialsQuery.data.map<GovernanceRow>((credential) => ({
@@ -2034,7 +2046,7 @@ export function CreatorGovernancePanel({
         ]),
       ],
     }));
-  }, [credentialsQuery.data, meta.rows]);
+  }, [credentialsQuery.data, governanceSummaryMetaFragment?.rows]);
 
   const filteredCredentialRows = useMemo(
     () => credentialRows.filter((row) => matchesSearchQuery(query, rowSearchTexts(row))),
@@ -2043,7 +2055,7 @@ export function CreatorGovernancePanel({
 
   const credentialMetrics = useMemo(() => {
     if (!credentialsQuery.data) {
-      return meta.metrics;
+      return governanceSummaryMetaFragment?.metrics ?? [];
     }
 
     const workspaceScoped = credentialsQuery.data.filter((item) => item.scope === "workspace").length;
@@ -2067,7 +2079,7 @@ export function CreatorGovernancePanel({
         note: l("轮换状态直接来源于后端治理对象。", "Rotation state comes directly from backend governance objects."),
       },
     ] satisfies GovernanceMetric[];
-  }, [credentialsQuery.data, meta.metrics]);
+  }, [credentialsQuery.data, governanceSummaryMetaFragment?.metrics]);
 
   const selectedCredentialSummary =
     credentialsQuery.data?.find((item) => item.credentialId === selectedCredentialId) ?? null;
@@ -2179,7 +2191,7 @@ export function CreatorGovernancePanel({
 
   const registryRows = useMemo(() => {
     if (!mcpsQuery.data) {
-      return meta.rows;
+      return [];
     }
 
     return mcpsQuery.data.map<GovernanceRow>((entry) => ({
@@ -2205,11 +2217,11 @@ export function CreatorGovernancePanel({
         ]),
       ],
     }));
-  }, [credentialLookup, mcpsQuery.data, meta.rows]);
+  }, [credentialLookup, mcpsQuery.data]);
 
   const bindingRows = useMemo(() => {
     if (!bindingsQuery.data) {
-      return meta.rows;
+      return [];
     }
 
     return bindingsQuery.data.map<GovernanceRow>((binding) => ({
@@ -2232,7 +2244,7 @@ export function CreatorGovernancePanel({
         ]),
       ],
     }));
-  }, [bindingsQuery.data, credentialLookup, mcpLookup, meta.rows]);
+  }, [bindingsQuery.data, credentialLookup, mcpLookup]);
 
   const filteredRegistryRows = useMemo(
     () => registryRows.filter((row) => matchesSearchQuery(query, rowSearchTexts(row))),
@@ -2245,7 +2257,7 @@ export function CreatorGovernancePanel({
 
   const policyMetrics = useMemo(() => {
     if (!mcpsQuery.data || !bindingsQuery.data) {
-      return meta.metrics;
+      return governanceSummaryMetaFragment?.metrics ?? [];
     }
 
     const approvalBound = bindingsQuery.data.filter((item) => item.approvalRequired).length;
@@ -2269,7 +2281,7 @@ export function CreatorGovernancePanel({
         note: l("用于识别高风险外部能力的运行边界。", "Helps identify high-risk external capability boundaries."),
       },
     ] satisfies GovernanceMetric[];
-  }, [bindingsQuery.data, mcpsQuery.data, meta.metrics]);
+  }, [bindingsQuery.data, governanceSummaryMetaFragment?.metrics, mcpsQuery.data]);
   const quotaPolicies = useMemo(
     () =>
       [...(quotaPoliciesQuery.data ?? [])].sort(
@@ -2763,18 +2775,12 @@ export function CreatorGovernancePanel({
     </article>
   );
 
-  const dynamicGovernanceSummary = useMemo(() => {
-    if (section !== "audit" && section !== "cost") {
-      return null;
-    }
-
-    if (!governanceSummaryQuery.data) {
-      return null;
-    }
-
-    return toGovernanceMetaFragment(governanceSummaryQuery.data);
-  }, [governanceSummaryQuery.data, section]);
+  const dynamicGovernanceSummary = governanceSummaryMetaFragment;
   const dynamicSummary = useMemo(() => {
+    if (dynamicGovernanceSummary) {
+      return dynamicGovernanceSummary.summary;
+    }
+
     if (section === "members" && membersQuery.data) {
       const pendingInvitations = workspaceInvitations.filter(
         (item) => item.invitation.status === "pending"
@@ -2827,11 +2833,10 @@ export function CreatorGovernancePanel({
       );
     }
 
-    if (dynamicGovernanceSummary) {
-      return dynamicGovernanceSummary.summary;
-    }
-
-    return meta.summary;
+    return l(
+      "正在加载当前治理分段的正式数据。",
+      "Loading formal governance data for the current governance segment."
+    );
   }, [
     canManageMembers,
     bindingsQuery.data,
@@ -2839,7 +2844,6 @@ export function CreatorGovernancePanel({
     dynamicGovernanceSummary,
     membersQuery.data,
     mcpsQuery.data,
-    meta.summary,
     section,
     workspaceInvitations,
     workspaceMembers,
@@ -3014,7 +3018,7 @@ export function CreatorGovernancePanel({
           ? credentialMetrics
           : section === "policy"
             ? policyMetrics
-            : dynamicGovernanceSummary?.metrics ?? meta.metrics
+            : dynamicGovernanceSummary?.metrics ?? []
         ).map((item) => (
           <div className="quick-box" key={t(lang, item.label)}>
             <div className="quick-label">{t(lang, item.label)}</div>
@@ -3126,11 +3130,37 @@ export function CreatorGovernancePanel({
               </button>
             </>
           ) : (
-            meta.actions.map((item) => (
-              <button className="route-btn" key={t(lang, item)} type="button">
-                {t(lang, item)}
+            <>
+              <button
+                className="route-btn"
+                type="button"
+                onClick={() => {
+                  setInvitationActionError(null);
+                  setMemberActionError(null);
+                  void Promise.all([
+                    queryClient.invalidateQueries({
+                      queryKey: ["dashboard", "workspace-members", workspaceRuntimeId],
+                    }),
+                    queryClient.invalidateQueries({
+                      queryKey: ["dashboard", "workspace-invitations", workspaceRuntimeId],
+                    }),
+                    queryClient.invalidateQueries({
+                      queryKey: ["dashboard", "creator", "governance-summary", packageId, section, workspaceContextKey],
+                    }),
+                  ]);
+                }}
+              >
+                {t(lang, { zh: "刷新成员状态", en: "Refresh member state" })}
               </button>
-            ))
+              <button
+                className="route-btn"
+                type="button"
+                disabled={query.trim().length === 0}
+                onClick={() => setQuery("")}
+              >
+                {t(lang, { zh: "清空筛选", en: "Clear filter" })}
+              </button>
+            </>
           )}
         </div>
       </div>

@@ -1,18 +1,24 @@
 import type {
+  AuthDisabledSessionBootstrap,
   AuthSessionEnvelope,
   AuthSessionResponse,
   AuthTokenPair,
+  WorkspaceContextSummary,
 } from "@lingban/contracts";
 import { create } from "zustand";
 
 type DashboardAuthMode = "unknown" | "disabled" | "required";
+type DashboardBootstrapWorkspace =
+  | AuthSessionEnvelope["currentWorkspace"]
+  | WorkspaceContextSummary;
 
 type PersistedDashboardAuthState = {
   tokens: AuthTokenPair | null;
   user: AuthSessionEnvelope["user"] | null;
   session: AuthSessionEnvelope["session"] | null;
-  currentWorkspace: AuthSessionEnvelope["currentWorkspace"] | null;
-  workspaces: AuthSessionEnvelope["workspaces"];
+  currentWorkspace: DashboardBootstrapWorkspace | null;
+  workspaces: DashboardBootstrapWorkspace[];
+  platformAccess: AuthSessionEnvelope["platformAccess"] | null;
 };
 
 type DashboardAuthState = PersistedDashboardAuthState & {
@@ -25,6 +31,7 @@ type DashboardAuthState = PersistedDashboardAuthState & {
   setLastError: (lastError: string | null) => void;
   applySessionResponse: (response: AuthSessionResponse) => void;
   applySessionEnvelope: (envelope: AuthSessionEnvelope) => void;
+  applyPublicWorkspaceBootstrap: (bootstrap: AuthDisabledSessionBootstrap) => void;
   clearAuth: (lastError?: string | null) => void;
 };
 
@@ -36,6 +43,7 @@ const EMPTY_AUTH_STATE: PersistedDashboardAuthState = {
   session: null,
   currentWorkspace: null,
   workspaces: [],
+  platformAccess: null,
 };
 
 function readStorage() {
@@ -76,6 +84,7 @@ function readPersistedState(): PersistedDashboardAuthState {
       session: parsed.session ?? null,
       currentWorkspace: parsed.currentWorkspace ?? null,
       workspaces: Array.isArray(parsed.workspaces) ? parsed.workspaces : [],
+      platformAccess: parsed.platformAccess ?? null,
     };
   } catch {
     return EMPTY_AUTH_STATE;
@@ -92,6 +101,7 @@ function toPersistedState(input: {
     session: input.envelope.session,
     currentWorkspace: input.envelope.currentWorkspace,
     workspaces: input.envelope.workspaces,
+    platformAccess: input.envelope.platformAccess,
   };
 }
 
@@ -130,6 +140,18 @@ export const useDashboardAuthStore = create<DashboardAuthState>((set, get) => ({
       ...persisted,
       authMode: "required",
       authenticated: Boolean(persisted.tokens?.accessToken),
+      bootstrapping: false,
+      lastError: null,
+    });
+  },
+  applyPublicWorkspaceBootstrap: (bootstrap) => {
+    clearStorage();
+    set({
+      ...EMPTY_AUTH_STATE,
+      currentWorkspace: bootstrap.currentWorkspace,
+      workspaces: bootstrap.workspaces,
+      authMode: "disabled",
+      authenticated: false,
       bootstrapping: false,
       lastError: null,
     });
