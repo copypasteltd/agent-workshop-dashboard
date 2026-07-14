@@ -5,20 +5,35 @@ export const governanceSections = ["credentials", "members", "policy", "audit", 
 
 export type GovernanceSection = (typeof governanceSections)[number];
 
-export const dashboardRoutes = {
-  workshops: "/dashboard/workshops",
-  workshop: (workshopId: string) => `/dashboard/workshops/${workshopId}`,
-  service: (serviceId: string) => `/dashboard/services/${serviceId}`,
+export const workspaceRoutes = {
+  root: "/workspace",
+  workshops: "/workspace/workshops",
+  workshop: (workshopId: string) => `/workspace/workshops/${workshopId}`,
+  service: (serviceId: string) => `/workspace/services/${serviceId}`,
   serviceBatch: (serviceId: string, batchJobId: string) =>
-    `/dashboard/services/${serviceId}/batches/${batchJobId}`,
-  instances: "/dashboard/instances",
+    `/workspace/services/${serviceId}/batches/${batchJobId}`,
+  instances: "/workspace/instances",
   instance: (instanceId: string, tab: InstanceTab = "overview") =>
-    tab === "overview" ? `/dashboard/instances/${instanceId}` : `/dashboard/instances/${instanceId}/${tab}`,
-  providers: "/dashboard/providers",
-  creator: "/dashboard/creator",
-  creatorPackage: (packageId: string) => `/dashboard/creator/packages/${packageId}`,
-  creatorDebug: (packageId: string) => `/dashboard/creator/packages/${packageId}/debug`,
-  creatorGovernance: (section: GovernanceSection = "credentials") => `/dashboard/creator/governance/${section}`,
+    tab === "overview"
+      ? `/workspace/instances/${instanceId}`
+      : `/workspace/instances/${instanceId}/${tab}`,
+  settingsProviders: "/workspace/settings/providers",
+  creator: "/workspace/creator",
+  creatorPackage: (packageId: string) => `/workspace/creator/packages/${packageId}`,
+  creatorDebug: (packageId: string) => `/workspace/creator/packages/${packageId}/debug`,
+  creatorGovernance: (section: GovernanceSection = "credentials") =>
+    `/workspace/creator/governance/${section}`,
+};
+
+export const adminRoutes = {
+  root: "/admin",
+  overview: "/admin/overview",
+  providers: "/admin/providers",
+};
+
+export const dashboardRoutes = {
+  ...workspaceRoutes,
+  providers: workspaceRoutes.settingsProviders,
 };
 
 export const isInstanceTab = (value: string | undefined): value is InstanceTab =>

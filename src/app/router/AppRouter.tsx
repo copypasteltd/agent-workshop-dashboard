@@ -1,10 +1,16 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
+import { AdminShell } from "../AdminShell";
 import { DashboardShell } from "../DashboardShell";
-import { dashboardRoutes } from "../../lib/routes";
+import { adminRoutes, workspaceRoutes } from "../../lib/routes";
 import { t } from "../../lib/i18n";
 import { useDashboardUiStore } from "../../stores/dashboardUiStore";
 
+const PortalEntryPage = lazy(async () =>
+  import("../../pages/portal/PortalEntryPage").then((module) => ({
+    default: module.PortalEntryPage,
+  }))
+);
 const WorkshopsPage = lazy(async () =>
   import("../../pages/workshops/WorkshopsPage").then((module) => ({
     default: module.WorkshopsPage,
@@ -15,14 +21,24 @@ const InstancesPage = lazy(async () =>
     default: module.InstancesPage,
   }))
 );
-const ProvidersPage = lazy(async () =>
-  import("../../pages/providers/ProvidersPage").then((module) => ({
-    default: module.ProvidersPage,
+const WorkspaceProviderBindingsPage = lazy(async () =>
+  import("../../pages/settings/WorkspaceProviderBindingsPage").then((module) => ({
+    default: module.WorkspaceProviderBindingsPage,
   }))
 );
 const CreatorPage = lazy(async () =>
   import("../../pages/creator/CreatorPage").then((module) => ({
     default: module.CreatorPage,
+  }))
+);
+const AdminOverviewPage = lazy(async () =>
+  import("../../pages/admin/AdminOverviewPage").then((module) => ({
+    default: module.AdminOverviewPage,
+  }))
+);
+const AdminProvidersPage = lazy(async () =>
+  import("../../pages/admin/AdminProvidersPage").then((module) => ({
+    default: module.AdminProvidersPage,
   }))
 );
 
@@ -61,13 +77,13 @@ function RoutePendingView() {
         <div style={{ fontSize: "18px", fontWeight: 700, marginBottom: "6px" }}>
           {t(lang, {
             zh: "正在准备控制台模块",
-            en: "Preparing dashboard module",
+            en: "Preparing console module",
           })}
         </div>
         <div style={{ color: "var(--muted)", lineHeight: 1.6 }}>
           {t(lang, {
-            zh: "当前工作区视图对应的路由代码正在加载。",
-            en: "Route code is loading for the current workspace view.",
+            zh: "当前入口对应的路由代码正在加载。",
+            en: "Route code for the current surface is loading.",
           })}
         </div>
       </div>
@@ -80,42 +96,77 @@ function withRouteSuspense(node: ReactNode) {
 }
 
 export function AppRouter() {
+  const portalElement = withRouteSuspense(<PortalEntryPage />);
   const workshopsElement = withRouteSuspense(<WorkshopsPage />);
   const instancesElement = withRouteSuspense(<InstancesPage />);
-  const providersElement = withRouteSuspense(<ProvidersPage />);
+  const workspaceProviderBindingsElement = withRouteSuspense(
+    <WorkspaceProviderBindingsPage />
+  );
   const creatorElement = withRouteSuspense(<CreatorPage />);
+  const adminOverviewElement = withRouteSuspense(<AdminOverviewPage />);
+  const adminProvidersElement = withRouteSuspense(<AdminProvidersPage />);
 
   return (
     <Routes>
+      <Route path="/" element={portalElement} />
+
       <Route element={<DashboardShell />}>
-        <Route path="/" element={<Navigate to={dashboardRoutes.workshops} replace />} />
-        <Route path="/dashboard" element={<Navigate to={dashboardRoutes.workshops} replace />} />
+        <Route path={workspaceRoutes.root} element={<Navigate to={workspaceRoutes.workshops} replace />} />
+        <Route path={workspaceRoutes.workshops} element={workshopsElement} />
+        <Route path="/workspace/workshops/:workshopId" element={workshopsElement} />
+        <Route path="/workspace/services/:serviceId" element={workshopsElement} />
+        <Route
+          path="/workspace/services/:serviceId/batches/:batchJobId"
+          element={workshopsElement}
+        />
+        <Route path={workspaceRoutes.instances} element={instancesElement} />
+        <Route path="/workspace/instances/:instanceId" element={instancesElement} />
+        <Route path="/workspace/instances/:instanceId/:detailTab" element={instancesElement} />
+        <Route path={workspaceRoutes.settingsProviders} element={workspaceProviderBindingsElement} />
+        <Route path={workspaceRoutes.creator} element={creatorElement} />
+        <Route path="/workspace/creator/packages/:packageId" element={creatorElement} />
+        <Route path="/workspace/creator/packages/:packageId/debug" element={creatorElement} />
+        <Route path="/workspace/creator/governance/:section" element={creatorElement} />
+
         <Route path="/workshops" element={workshopsElement} />
         <Route path="/workshops/:workshopId" element={workshopsElement} />
         <Route path="/services/:serviceId" element={workshopsElement} />
         <Route path="/services/:serviceId/batches/:batchJobId" element={workshopsElement} />
-        <Route path={dashboardRoutes.workshops} element={workshopsElement} />
-        <Route path="/dashboard/workshops/:workshopId" element={workshopsElement} />
-        <Route path="/dashboard/services/:serviceId" element={workshopsElement} />
-        <Route
-          path="/dashboard/services/:serviceId/batches/:batchJobId"
-          element={workshopsElement}
-        />
         <Route path="/instances" element={instancesElement} />
         <Route path="/instances/:instanceId" element={instancesElement} />
         <Route path="/instances/:instanceId/:detailTab" element={instancesElement} />
-        <Route path={dashboardRoutes.instances} element={instancesElement} />
-        <Route path="/dashboard/instances/:instanceId" element={instancesElement} />
-        <Route path="/dashboard/instances/:instanceId/:detailTab" element={instancesElement} />
-        <Route path="/providers" element={providersElement} />
-        <Route path={dashboardRoutes.providers} element={providersElement} />
         <Route path="/creator" element={creatorElement} />
         <Route path="/creator/:packageId" element={creatorElement} />
-        <Route path={dashboardRoutes.creator} element={creatorElement} />
-        <Route path="/dashboard/creator/packages/:packageId" element={creatorElement} />
-        <Route path="/dashboard/creator/packages/:packageId/debug" element={creatorElement} />
-        <Route path="/dashboard/creator/governance/:section" element={creatorElement} />
       </Route>
+
+      <Route element={<AdminShell />}>
+        <Route path={adminRoutes.root} element={<Navigate to={adminRoutes.overview} replace />} />
+        <Route path={adminRoutes.overview} element={adminOverviewElement} />
+        <Route path={adminRoutes.providers} element={adminProvidersElement} />
+      </Route>
+
+      <Route path="/dashboard" element={<Navigate to={workspaceRoutes.workshops} replace />} />
+      <Route path="/dashboard/workshops/:workshopId" element={<Navigate to={workspaceRoutes.workshops} replace />} />
+      <Route path="/dashboard/services/:serviceId" element={<Navigate to={workspaceRoutes.workshops} replace />} />
+      <Route
+        path="/dashboard/services/:serviceId/batches/:batchJobId"
+        element={<Navigate to={workspaceRoutes.workshops} replace />}
+      />
+      <Route path="/dashboard/instances/:instanceId" element={<Navigate to={workspaceRoutes.instances} replace />} />
+      <Route
+        path="/dashboard/instances/:instanceId/:detailTab"
+        element={<Navigate to={workspaceRoutes.instances} replace />}
+      />
+      <Route path="/dashboard/providers" element={<Navigate to={adminRoutes.providers} replace />} />
+      <Route path="/dashboard/creator/packages/:packageId" element={<Navigate to={workspaceRoutes.creator} replace />} />
+      <Route
+        path="/dashboard/creator/packages/:packageId/debug"
+        element={<Navigate to={workspaceRoutes.creator} replace />}
+      />
+      <Route
+        path="/dashboard/creator/governance/:section"
+        element={<Navigate to={workspaceRoutes.creator} replace />}
+      />
     </Routes>
   );
 }

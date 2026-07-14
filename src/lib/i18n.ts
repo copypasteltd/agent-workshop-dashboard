@@ -11,14 +11,14 @@ export type LocalizedString = {
 const resources = {
   zh: {
     translation: {
-      "dashboard.title": "灵办词元 Dashboard",
-      "dashboard.operatorTitle": "灵办词元 / Operator Dashboard",
+      "dashboard.title": "灵办词元 Workspace Console",
+      "dashboard.operatorTitle": "灵办词元 / Workspace Console",
     },
   },
   en: {
     translation: {
-      "dashboard.title": "Lingban Ciyuan Dashboard",
-      "dashboard.operatorTitle": "Lingban Ciyuan / Operator Dashboard",
+      "dashboard.title": "Lingban Ciyuan Workspace Console",
+      "dashboard.operatorTitle": "Lingban Ciyuan / Workspace Console",
     },
   },
 } as const;

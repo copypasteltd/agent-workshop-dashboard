@@ -86,18 +86,18 @@ export function DashboardAuthScreen() {
           </div>
           <div>
             <div className="eyebrow">
-              {t(lang, { zh: "控制台登录", en: "Console sign in" })}
+              {t(lang, { zh: "工作台登录", en: "Workspace sign in" })}
             </div>
             <h1 className="auth-title">
               {t(lang, {
-                zh: "灵办词元 Dashboard",
-                en: "Lingban Ciyuan Dashboard",
+                zh: "灵办词元 Workspace Console",
+                en: "Lingban Ciyuan Workspace Console",
               })}
             </h1>
             <p className="auth-copy">
               {t(lang, {
                 zh: "登录后进入与你的工作区绑定的工坊、实例与 Creator 包。实例继续沿用完整对话模式，文件与结果严格绑定当前空间。",
-                en: "Sign in to enter the workshops, instances, and creator packages bound to your workspace. Live runs stay in full conversation mode and files remain scoped to the active space.",
+                en: "Sign in to enter the workshops, instances, settings, and creator packages bound to your workspace. Live runs stay in full conversation mode and files remain scoped to the active space.",
               })}
             </p>
           </div>
@@ -221,7 +221,7 @@ export function DashboardAuthScreen() {
               ? t(lang, { zh: "处理中", en: "Submitting" })
               : mode === "register"
                 ? t(lang, { zh: "创建并进入工作区", en: "Create workspace and continue" })
-                : t(lang, { zh: "进入控制台", en: "Enter dashboard" })}
+                : t(lang, { zh: "进入工作台", en: "Enter workspace" })}
           </button>
         </div>
 

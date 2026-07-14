@@ -10,6 +10,8 @@ export function IconSprite() {
       <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="M20 20L16.65 16.65" /></symbol>
       <symbol id="i-folder" viewBox="0 0 24 24"><path d="M4 7.5C4 6.67 4.67 6 5.5 6H10L12 8H18.5C19.33 8 20 8.67 20 9.5V17.5C20 18.33 19.33 19 18.5 19H5.5C4.67 19 4 18.33 4 17.5Z" /></symbol>
       <symbol id="i-network" viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.5" /><circle cx="18" cy="6" r="2.5" /><circle cx="18" cy="18" r="2.5" /><path d="M8.4 11L15.6 7" /><path d="M8.4 13L15.6 17" /></symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3L19 6V11C19 15.42 16.14 19.15 12 20.5C7.86 19.15 5 15.42 5 11V6L12 3Z" /><path d="M9.75 12L11.25 13.5L14.5 10.25" /></symbol>
+      <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 6H10" /><path d="M14 6H20" /><circle cx="12" cy="6" r="2" /><path d="M4 12H6" /><path d="M10 12H20" /><circle cx="8" cy="12" r="2" /><path d="M4 18H14" /><path d="M18 18H20" /><circle cx="16" cy="18" r="2" /></symbol>
       <symbol id="i-panel-left" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4V20" /><path d="M14 9L10 12L14 15" /></symbol>
       <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 16V11C6 7.69 8.69 5 12 5C15.31 5 18 7.69 18 11V16L20 18H4L6 16Z" /><path d="M10 20C10.53 20.61 11.24 21 12 21C12.76 21 13.47 20.61 14 20" /></symbol>
       <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4" /><path d="M5 19C6.75 16.67 9.17 15.5 12 15.5C14.83 15.5 17.25 16.67 19 19" /></symbol>

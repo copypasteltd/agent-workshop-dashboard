@@ -23,7 +23,7 @@ import {
 } from "../lib/api";
 import { dashboardI18n, setDashboardLanguage, t } from "../lib/i18n";
 import { mapRunSnapshotToInstanceRecord } from "../lib/liveRunAdapters";
-import { dashboardRoutes } from "../lib/routes";
+import { dashboardRoutes, workspaceRoutes } from "../lib/routes";
 import { applyDashboardTheme } from "../lib/theme";
 import {
   hasAuthoritativeDashboardWorkspaceContext,
@@ -543,12 +543,12 @@ export function DashboardShell() {
     [creatorAccess.canAccessCreator, packagesQuery.data]
   );
 
-  const view = useMemo<"workshops" | "instances" | "providers" | "creator">(() => {
+  const view = useMemo<"workshops" | "instances" | "settings" | "creator">(() => {
     if (location.pathname.includes("/instances")) {
       return "instances";
     }
-    if (location.pathname.includes("/providers")) {
-      return "providers";
+    if (location.pathname.includes("/settings")) {
+      return "settings";
     }
     if (location.pathname.includes("/creator")) {
       return "creator";
@@ -576,7 +576,7 @@ export function DashboardShell() {
 
   const viewMeta = {
     workshops: {
-      label: "dashboard://workshops",
+      label: "workspace://workshops",
       title: t(lang, { zh: "工坊", en: "Workshops" }),
       desc: t(lang, {
         zh: "用于选择工作流、筛选工坊、快速实例化任务。首页只保留浏览和启动所需信息，技术路由与结构说明进入折叠详情。",
@@ -584,23 +584,23 @@ export function DashboardShell() {
       }),
     },
     instances: {
-      label: `dashboard://instances/${activeInstanceId}`,
+      label: `workspace://instances/${activeInstanceId}`,
       title: t(lang, { zh: "实例", en: "Instances" }),
       desc: t(lang, {
         zh: "多任务列表在左，当前实例的完整对话在中，文件、运行、审计等深层信息进入右侧子页签。",
         en: "The task list stays on the left, the full conversation for the active instance stays in the center, and files, runtime, and audit move into right-side subtabs.",
       }),
     },
-    providers: {
-      label: `dashboard://providers/${currentWorkspace.id}`,
-      title: t(lang, { zh: "Provider", en: "Providers" }),
+    settings: {
+      label: `workspace://settings/providers/${currentWorkspace.id}`,
+      title: t(lang, { zh: "设置", en: "Settings" }),
       desc: t(lang, {
         zh: "鍦ㄥ悗鍙版帶鍒剁涓夋柟 OpenAI-compatible Provider銆侀粯璁ゆā鍨嬪拰宸ヤ綔鍖虹粦瀹氾紝鏂板缓 run 浼氬湪鍚姩鏃跺喅瀹氬疄闄呬笂娓告簮銆?",
-        en: "Control third-party OpenAI-compatible providers, default models, and workspace bindings from the dashboard. New runs resolve their upstream route at launch time.",
+        en: "This entry handles only workspace-level model routing and provider bindings, including visible upstreams, default routes, credential mounts, and model override policy.",
       }),
     },
     creator: {
-      label: `dashboard://creator/${activePackageId}`,
+      label: `workspace://creator/${activePackageId}`,
       title: t(lang, { zh: "Creator", en: "Creator" }),
       desc: t(lang, {
         zh: "Creator 页聚焦 package、runtime、connectors 与发布审核。重型工程信息进入子页签，首屏只保留选择和判断所需内容。",
@@ -832,7 +832,7 @@ export function DashboardShell() {
                 <p className="auth-copy">
                   {t(lang, {
                     zh: "如果存在有效会话，控制台会直接恢复到上次工作区。",
-                    en: "If a valid session exists, the dashboard restores the previous workspace automatically.",
+                    en: "If a valid session exists, the workspace console restores the previous workspace automatically.",
                   })}
                 </p>
               </div>
@@ -886,12 +886,12 @@ export function DashboardShell() {
               </svg>
             </button>
             <button
-              className={`rail-btn ${view === "providers" ? "active" : ""}`}
+              className={`rail-btn ${view === "settings" ? "active" : ""}`}
               type="button"
-              onClick={() => navigate(dashboardRoutes.providers)}
+              onClick={() => navigate(workspaceRoutes.settingsProviders)}
             >
               <svg className="icon">
-                <use href="#i-network" />
+                <use href="#i-sliders" />
               </svg>
             </button>
             <button
@@ -925,12 +925,12 @@ export function DashboardShell() {
               </div>
               <div>
                 <div className="brand-sub">
-                  {t(lang, { zh: "多语言控制台", en: "Multilingual Console" })}
+                  {t(lang, { zh: "多语言工作台", en: "Multilingual workspace console" })}
                 </div>
                 <div className="brand-title">
                   {t(lang, {
-                    zh: "灵办词元 / Operator Dashboard",
-                    en: "Lingban Ciyuan / Operator Dashboard",
+                    zh: "灵办词元 / Workspace Console",
+                    en: "Lingban Ciyuan / Workspace Console",
                   })}
                 </div>
               </div>
@@ -962,12 +962,12 @@ export function DashboardShell() {
             </NavLink>
             <NavLink
               className={({ isActive }) => `nav-btn ${isActive ? "active" : ""}`}
-              to={dashboardRoutes.providers}
+              to={workspaceRoutes.settingsProviders}
             >
               <svg className="icon">
-                <use href="#i-network" />
+                <use href="#i-sliders" />
               </svg>
-              <span className="nav-text">{t(lang, { zh: "Provider", en: "Providers" })}</span>
+              <span className="nav-text">{t(lang, { zh: "设置", en: "Settings" })}</span>
             </NavLink>
             {creatorAccess.canAccessCreator ? (
               <NavLink
