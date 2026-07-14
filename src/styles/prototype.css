@@ -185,16 +185,18 @@
       left: 72px;
       width: 248px;
       overflow-y: auto;
-      transform: translateX(-28px);
+      transform: translateX(calc(-100% - 4px));
       opacity: 0;
+      visibility: hidden;
       pointer-events: none;
-      transition: transform var(--transition-fast), opacity var(--transition-fast);
+      transition: transform var(--transition-fast), opacity var(--transition-fast), visibility var(--transition-fast);
       z-index: 24;
     }
 
     body[data-sidebar="open"] .sidebar {
       transform: translateX(0);
       opacity: 1;
+      visibility: visible;
       pointer-events: auto;
     }
 
@@ -802,8 +804,11 @@
 
     .view {
       display: grid;
+      grid-template-columns: minmax(0, 1fr);
       gap: 14px;
       align-content: start;
+      min-width: 0;
+      max-width: 100%;
     }
 
     .hero-card {
@@ -831,6 +836,35 @@
     .list-group {
       display: grid;
       gap: 12px;
+      min-width: 0;
+      max-width: 100%;
+    }
+
+    .conversation-stack,
+    .detail-stack,
+    .detail-card,
+    .detail-body,
+    .detail-item,
+    .governance-stack,
+    .governance-card,
+    .tab-grid,
+    .list-group {
+      grid-template-columns: minmax(0, 1fr);
+      min-width: 0;
+      max-width: 100%;
+    }
+
+    .hero-card,
+    .page-grid,
+    .filter-card,
+    .workshop-card,
+    .package-card,
+    .conversation-stack,
+    .detail-stack,
+    .creator-layout,
+    .quick-box {
+      min-width: 0;
+      max-width: 100%;
     }
 
     .metric-grid {
@@ -841,6 +875,20 @@
       display: grid;
       gap: 6px;
       background: var(--surface-2);
+    }
+
+    .providers-form-grid {
+      display: grid;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .providers-form-grid-2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .providers-form-grid-3 {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
     .metric-label {
@@ -1078,6 +1126,14 @@
       background: var(--surface-3);
       display: grid;
       gap: 6px;
+    }
+
+    .quick-label,
+    .quick-value,
+    .quick-box .tiny-note {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
 
     .quick-label {
@@ -1433,6 +1489,25 @@
       min-height: 64px;
     }
 
+    .governance-field > input,
+    .governance-field > textarea,
+    .governance-field > select {
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+      border: 0;
+      outline: none;
+      background: transparent;
+      color: var(--text);
+      font: inherit;
+    }
+
+    .provider-route-select {
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+    }
+
     .governance-select {
       width: 100%;
       min-width: 0;
@@ -1505,7 +1580,7 @@
     .creator-rail-metrics {
       display: grid;
       gap: 8px;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: minmax(0, 1fr);
     }
 
     .creator-tone-plain {
@@ -1783,13 +1858,19 @@
     }
 
     @media (max-width: 1440px) {
-      .page-grid,
       .workshop-grid,
+      .metric-grid,
+      .quick-grid,
+      .action-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 1100px) {
+      .page-grid,
       .instance-layout,
       .creator-layout,
-      .quick-grid,
-      .tech-grid,
-      .metric-grid {
+      .tech-grid {
         grid-template-columns: 1fr;
       }
 
@@ -1798,8 +1879,7 @@
         align-items: stretch;
       }
 
-      .creator-rail-metrics,
-      .action-grid {
+      .creator-rail-metrics {
         grid-template-columns: 1fr;
       }
 
@@ -1837,6 +1917,22 @@
 
       .governance-form-actions .route-btn {
         width: 100%;
+      }
+    }
+
+    @media (max-width: 560px) {
+      .workshop-grid,
+      .metric-grid,
+      .quick-grid,
+      .action-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .creator-layout *,
+      .detail-card * {
+        min-width: 0;
+        max-width: 100%;
+        overflow-wrap: anywhere;
       }
     }
 
@@ -1910,5 +2006,27 @@
 
       .auth-highlights {
         grid-template-columns: 1fr;
+      }
+
+      .providers-form-grid-2,
+      .providers-form-grid-3 {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .providers-hero-grid,
+      .providers-content-grid {
+        grid-template-columns: 1fr !important;
+      }
+
+      .providers-metric-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+      }
+    }
+
+    @media (max-width: 440px) {
+      .providers-metric-grid {
+        grid-template-columns: 1fr !important;
       }
     }

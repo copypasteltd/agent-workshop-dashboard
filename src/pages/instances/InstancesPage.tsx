@@ -645,7 +645,7 @@ function InstanceTabPanel({ instance, liveMode }: { instance: InstanceRecord; li
     queryKey: ["dashboard", "billing", "entries", "run", instance.id],
     queryFn: async () => {
       try {
-        return await dashboardBillingApi.listEntries({ runId: instance.id, limit: 6 });
+        return await dashboardBillingApi.listEntries({ runId: instance.id });
       } catch {
         return [];
       }
@@ -1300,7 +1300,6 @@ export function InstancesPage() {
   const { instanceId, detailTab } = useParams();
   const lang = useDashboardUiStore((state) => state.lang);
   const currentWorkspaceId = useDashboardUiStore((state) => state.currentWorkspaceId);
-  const authMode = useDashboardAuthStore((state) => state.authMode);
   const authWorkspaces = useDashboardAuthStore((state) => state.workspaces);
   const authCurrentWorkspace = useDashboardAuthStore((state) => state.currentWorkspace);
   const activeInstanceId = useDashboardUiStore((state) => state.activeInstanceId);
@@ -1321,7 +1320,7 @@ export function InstancesPage() {
         workspaces: authWorkspaces.length > 0 ? authWorkspaces : undefined,
         fallbackWorkspace: authCurrentWorkspace,
       }),
-    [authCurrentWorkspace, authMode, authWorkspaces, currentWorkspaceId]
+    [authCurrentWorkspace, authWorkspaces, currentWorkspaceId]
   );
   const workspaceDataReady = hasAuthoritativeDashboardWorkspaceContext(currentWorkspace);
 

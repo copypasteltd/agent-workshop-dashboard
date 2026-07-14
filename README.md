@@ -1,68 +1,121 @@
 # 灵办词元控制台 / Lingban Dashboard
 
-## 仓库定位 / Repository Role
+灵办词元 Web 控制台面向重度用户、Creator、工作区管理员与平台管理员。工作区控制台和平台管理后台使用独立 Shell、路由与权限边界。
 
-本目录是面向重度用户与 creator 的 Web Dashboard，位于 `app/dashboard`，属于拆分分支 `agent-workshop-app` 的前端主站部分。
+The Lingban Dashboard serves power users, creators, workspace administrators, and platform administrators. Workspace and platform administration surfaces have separate shells, routes, and authorization boundaries.
 
-This directory contains the Web Dashboard for power users and creators. It lives at `app/dashboard` and forms the heavy-use web frontend in the `agent-workshop-app` branch.
+## 仓库信息 / Repository
 
-## 产品职责 / Product Scope
-
-- 工坊目录浏览、筛选、详情与启动入口
-- 多任务实例列表、运行状态、会话详情与文件查看
-- Creator 工作台、发布视图、治理与审计面板
-- 多语言、明暗主题、抽屉式侧边栏与高信息密度布局
-
-## 代码结构 / Code Structure
-
-| 路径 | 作用 | 关键文件 |
-| --- | --- | --- |
-| `src/app/` | 应用壳、provider、router、shell | `App.tsx`, `DashboardShell.tsx`, `router/AppRouter.tsx` |
-| `src/pages/workshops/` | 工坊目录与详情入口 | `WorkshopsPage.tsx` |
-| `src/pages/instances/` | 实例列表、运行态视图、任务会话主页面 | `InstancesPage.tsx` |
-| `src/pages/creator/` | Creator 工作台、发布与治理 | `CreatorPage.tsx`, `CreatorGovernancePanel.tsx` |
-| `src/components/` | 认证屏、基础图标与复用组件 | `DashboardAuthScreen.tsx`, `IconSprite.tsx` |
-| `src/lib/` | API、路由、i18n、实时流、主题、工作区上下文 | `api.ts`, `runStream.ts`, `i18n.ts`, `workspaceContext.ts` |
-| `src/stores/` | 认证态与 UI 态 | `dashboardAuthStore.ts`, `dashboardUiStore.ts` |
-| `src/styles/` | 原型样式与设计 token | `prototype.css`, `tokens.css` |
-
-## 技术栈 / Tech Stack
-
-- React 18
-- Vite 5
-- TypeScript
-- React Router
-- Zustand
-- TanStack Query
-- i18next / react-i18next
-
-## 共享依赖 / Shared Packages
-
-| 包 | 用途 |
+| 项目 | 内容 |
 | --- | --- |
-| `@lingban/api-sdk` | API 调用层 |
-| `@lingban/contracts` | 类型与契约 |
-| `@lingban/domain-models` | 运行态与业务模型 |
-| `@lingban/ui-tokens` | 视觉 token |
-| `@lingban/realtime` | 实时订阅能力 |
+| GitHub | `git@github.com:copypasteltd/agent-workshop-dashboard.git` |
+| Monorepo 路径 | `app/dashboard` |
+| 主分支 | `main` |
+| 技术栈 | React 18、Vite 5、TypeScript、React Router、TanStack Query、Zustand、i18next |
+| 设计基线 | 方案 C Operator |
 
-## 开发命令 / Commands
+The component uses internal `workspace:*` packages. Source development runs from the monorepo workspace; standalone release exports include the complete dependency closure.
 
-```bash
-pnpm -C app/dashboard dev
-pnpm -C app/dashboard build
-pnpm -C app/dashboard preview
-pnpm -C app/dashboard lint
-pnpm -C app/dashboard typecheck
+## 入口与路由 / Entry Points
+
+| 路由 | 受众 | 内容 |
+| --- | --- | --- |
+| `/` | 已认证用户 | 按角色进入工作区控制台或平台后台 |
+| `/workspace/workshops` | 工作区成员 | 工坊目录、详情、服务、批量任务与启动入口 |
+| `/workspace/instances` | 工作区成员 | 多实例列表、任务详情、对话、文件、运行态与审批 |
+| `/workspace/settings/providers` | 工作区管理员 | 工作区 Provider 路由绑定与默认模型选择 |
+| `/workspace/creator` | Creator | Package、Session、Release、Replay 与发布治理 |
+| `/workspace/creator/governance/:section` | Creator | Policy、Audit、Cost 治理视图 |
+| `/admin/overview` | 平台管理员 | 平台总览、健康状态与管理入口 |
+| `/admin/providers` | 平台管理员 | 多 Provider 配置、凭证引用、健康检查与启停 |
+| `/dashboard/*` | 历史链接 | 保留路径、查询参数和 Hash 的兼容跳转 |
+
+## 功能域 / Product Domains
+
+| 域 | 已实现能力 |
+| --- | --- |
+| 认证与工作区 | 登录、注册、刷新会话、工作区切换、角色守卫 |
+| 工坊 | 搜索、分类、收藏、详情、服务详情、最近使用 |
+| 执行实例 | 多任务筛选、完整 Codex 对话、实时状态、附件、审批、结果卡片 |
+| 文件 | target path 树、面包屑、预览、下载票据、归档入口 |
+| 批量任务 | 文件导入、字段映射、校验、估算、启动、重试、取消 |
+| Creator | Package、Session Pack、Release、Gate、Activation、Replay、Audit Export |
+| 治理 | Credential、MCP、Quota、Billing、Provider 绑定、成本与审计摘要 |
+| 平台管理 | 独立 Admin Shell、Provider 管理、健康检查、默认路由 |
+| 体验基础 | 中英文、明暗主题、通知、全局搜索、抽屉式侧栏、响应式布局 |
+
+## 工程结构 / Code Structure
+
+| 路径 | 作用 |
+| --- | --- |
+| `src/app/router/AppRouter.tsx` | 工作区、Creator、Admin 与兼容路由 |
+| `src/app/DashboardShell.tsx` | 工作区导航、抽屉侧栏、搜索、通知与账户菜单 |
+| `src/app/AdminShell.tsx` | 平台管理后台独立布局与权限入口 |
+| `src/app/providers/DashboardAuthBootstrap.tsx` | 会话恢复、角色识别与认证启动 |
+| `src/pages/workshops/` | 工坊、服务、批量任务与启动流程 |
+| `src/pages/instances/` | 实例列表、对话、文件、运行与审批详情 |
+| `src/pages/creator/` | Creator 资产、发布、回放、审计与成本治理 |
+| `src/pages/admin/` | 平台总览与 Provider 管理 |
+| `src/pages/providers/` | 平台 Provider 和工作区绑定表单 |
+| `src/lib/api.ts` | API SDK、Token 刷新、Provider API 与地址解析 |
+| `src/lib/runStream.ts` | WebSocket/SSE 运行事件订阅 |
+| `src/lib/i18n.ts` | 国际化资源与语言切换 |
+| `src/stores/` | 认证状态和 UI 状态 |
+| `src/styles/` | 方案 C 视觉、设计 Token 与响应式规则 |
+
+## API 地址解析 / API Resolution
+
+Dashboard 按以下优先级解析 API：
+
+1. `window.__LINGBAN_RUNTIME_CONFIG__.apiBaseUrl`
+2. `VITE_API_BASE_URL`
+3. 浏览器运行地址推导：本机使用 `:3100`，部署端口 `38110` 映射到同主机 `:38130`
+4. 同源地址
+
+```env
+VITE_API_BASE_URL=http://127.0.0.1:3100
 ```
 
-## 视觉与交互约束 / Interaction Notes
+This resolution order supports immutable static assets with deployment-time API configuration.
 
-- 以方案 C 原型为正式方向
-- 左侧导航为抽屉式折叠结构
-- 页面拆分优先保证可读性，不堆叠过高密度信息
-- 实例详情页必须支持完整对话模式，不做静态运行日志页
+## 开发与验证 / Development
+
+在 monorepo 根目录执行：
+
+```bash
+pnpm install
+pnpm -C app/dashboard dev
+pnpm -C app/dashboard typecheck
+pnpm -C app/dashboard lint
+pnpm -C app/dashboard build
+pnpm -C app/dashboard preview
+```
+
+## 布局约束 / Layout Rules
+
+- 左侧导航使用可折叠抽屉；折叠后完全释放内容宽度。
+- `1440px`、`1100px`、`560px` 断点分别处理宽屏、多栏收缩与移动堆叠。
+- 页面分区使用平面布局，卡片仅承载重复实体、工具或弹窗。
+- 实例详情持续保留完整对话，运行信息和文件作为任务内详情视图。
+- Provider、Creator 治理和批量导入表单在窄宽度下保持字段、按钮和文本完整可见。
+- 所有图标通过统一现代扁平图标体系输出，并提供可访问名称。
 
 ## 当前状态 / Current Status
 
-当前已经落地应用壳、路由、主题、多语言框架和原型级页面结构。后续主要工作是把真实 API、工作区权限、实时 run 流与 creator 发布流完整接入。
+截至 2026-07-14，Dashboard 已接入工作区与平台管理两套正式入口。认证启动、旧路由迁移、Provider 查询兼容、Creator 数据装载、响应式网格和窄屏表单已完成稳定性修复。
+
+As of 2026-07-14, both workspace and platform administration consoles are connected to the live API. Authentication bootstrap, legacy route migration, provider query compatibility, creator data loading, responsive grids, and narrow-screen forms have been stabilized.
+
+| 验证项 | 结果 |
+| --- | --- |
+| Oxlint | 0 warning / 0 error |
+| TypeScript | 通过 |
+| Vite production build | 通过 |
+| Playwright 双端 E2E | 23/23 通过 |
+| Dashboard 页面状态视觉检查 | 52/52 通过 |
+| 工作区验收地址 | `http://192.168.31.20:38110/workspace/workshops` |
+| 平台后台验收地址 | `http://192.168.31.20:38110/admin/overview` |
+
+生产环境仍需持续补齐真实流量下的性能基线、可访问性审计、国际化文案全量校对与浏览器兼容矩阵。
+
+Production follow-up covers load baselines, accessibility audits, complete translation review, and the supported-browser matrix.

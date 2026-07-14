@@ -1275,7 +1275,6 @@ export function CreatorGovernancePanel({
       dashboardBillingApi.listEntries({
         workspaceContextKey,
         packageId,
-        limit: 8,
       }),
     enabled: authReady && section === "cost",
     retry: false,

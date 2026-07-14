@@ -5874,7 +5874,7 @@ export function CreatorPage() {
         workspaces: authWorkspaces.length > 0 ? authWorkspaces : undefined,
         fallbackWorkspace: authCurrentWorkspace,
       }),
-    [authCurrentWorkspace, authMode, authWorkspaces, currentWorkspaceId]
+    [authCurrentWorkspace, authWorkspaces, currentWorkspaceId]
   );
   const workspaceViews = useMemo(
     () => {
@@ -5922,16 +5922,21 @@ export function CreatorPage() {
     retry: false,
     staleTime: 30_000,
   });
+  const detailPackageId =
+    activePackageId &&
+    packagesQuery.data?.some((item) => item.packageId === activePackageId)
+      ? activePackageId
+      : "";
   const packageDetailQuery = useQuery({
-    queryKey: ["dashboard", "creator", "package", activePackageId],
+    queryKey: ["dashboard", "creator", "package", detailPackageId],
     queryFn: async () => {
-      if (!activePackageId) {
+      if (!detailPackageId) {
         return null;
       }
 
-      return dashboardCreatorApi.getPackage(activePackageId);
+      return dashboardCreatorApi.getPackage(detailPackageId);
     },
-    enabled: dataQueriesEnabled && Boolean(activePackageId),
+    enabled: dataQueriesEnabled && Boolean(detailPackageId),
     retry: false,
     staleTime: 30_000,
   });
@@ -6307,7 +6312,7 @@ export function CreatorPage() {
         <div className="section-head">
           <div>
             <div className="eyebrow">{t(lang, { zh: "Creator 工作台", en: "Creator Studio" })}</div>
-            <h2 className="hero-title">{t(lang, { zh: "按 package 管理，而不是把所有工程细节堆在一页", en: "Manage by package instead of stacking all engineering detail into one page" })}</h2>
+            <h2 className="hero-title">{t(lang, { zh: "按 package 管理，工程细节进入独立页面", en: "Manage by package with dedicated pages for engineering detail" })}</h2>
           </div>
           <span className="pill active">dashboard://creator</span>
         </div>

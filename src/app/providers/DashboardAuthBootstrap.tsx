@@ -3,7 +3,7 @@ import type {
   AuthDisabledSessionBootstrap,
   AuthSessionEnvelope,
 } from "@lingban/contracts";
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { dashboardApiBaseUrl, dashboardAuthFetch } from "../../lib/api";
 import { inferWorkspaceContextKey } from "../../lib/workspaceContext";
 import { useDashboardUiStore } from "../../stores/dashboardUiStore";
@@ -96,14 +96,7 @@ function syncWorkspaceSelection(
 }
 
 export function DashboardAuthBootstrap({ children }: PropsWithChildren) {
-  const startedRef = useRef(false);
-
   useEffect(() => {
-    if (startedRef.current) {
-      return;
-    }
-
-    startedRef.current = true;
     let cancelled = false;
 
     const bootstrap = async () => {

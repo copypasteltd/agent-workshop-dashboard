@@ -222,7 +222,7 @@ export function DashboardShell() {
         workspaces: authWorkspaces.length > 0 ? authWorkspaces : undefined,
         fallbackWorkspace: authCurrentWorkspace,
       }),
-    [authCurrentWorkspace, authMode, authWorkspaces, currentWorkspaceId]
+    [authCurrentWorkspace, authWorkspaces, currentWorkspaceId]
   );
   const workspaceOptions = useMemo(
     () => {

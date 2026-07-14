@@ -337,7 +337,7 @@ export function WorkshopsPage() {
         workspaces: authWorkspaces.length > 0 ? authWorkspaces : undefined,
         fallbackWorkspace: authCurrentWorkspace,
       }),
-    [authCurrentWorkspace, authMode, authWorkspaces, currentWorkspaceId]
+    [authCurrentWorkspace, authWorkspaces, currentWorkspaceId]
   );
   const workspaceDataReady = hasAuthoritativeDashboardWorkspaceContext(currentWorkspace);
   const favoritesEnabled = currentWorkspace.source === "auth";
@@ -378,14 +378,14 @@ export function WorkshopsPage() {
   });
   const providerBindingsQuery = useQuery({
     queryKey: ["dashboard", "launch-provider-bindings", currentWorkspace.selectionId, currentWorkspace.id],
-    queryFn: async () => dashboardProvidersApi.listBindings({ enabled: true }),
+    queryFn: async () => dashboardProvidersApi.listBindings(),
     enabled: workspaceDataReady,
     retry: false,
     staleTime: 30_000,
   });
   const providerProfilesQuery = useQuery({
     queryKey: ["dashboard", "launch-provider-profiles", currentWorkspace.selectionId, currentWorkspace.id],
-    queryFn: async () => dashboardProvidersApi.listProviders({ enabled: true }),
+    queryFn: async () => dashboardProvidersApi.listProviders(),
     enabled: workspaceDataReady,
     retry: false,
     staleTime: 30_000,
@@ -1459,25 +1459,23 @@ export function WorkshopsPage() {
                   <>
                     <label className="fake-input">
                       <select
-                        className="search-inline-input"
+                        className="search-inline-input provider-route-select"
                         value={launchProviderBindingId}
                         onChange={(event) => setLaunchProviderBindingId(event.target.value)}
                       >
                         <option value="__default__">
                           {t(lang, {
                             zh: defaultLaunchProvider
-                              ? `使用工作区默认路由 (${defaultLaunchProvider.providerLabel})`
+                              ? "使用工作区默认路由"
                               : "使用工作区默认路由",
                             en: defaultLaunchProvider
-                              ? `Use workspace default (${defaultLaunchProvider.providerLabel})`
+                              ? "Use workspace default"
                               : "Use workspace default",
                           })}
                         </option>
                         {launchProviderOptions.map((option) => (
                           <option key={option.bindingId} value={option.bindingId}>
                             {option.providerLabel}
-                            {option.isDefault ? " / default" : ""}
-                            {` / P${option.priority}`}
                           </option>
                         ))}
                       </select>
@@ -1643,6 +1641,7 @@ export function WorkshopsPage() {
                 <label className="fake-input" style={{ marginBottom: 10 }}>
                   <input
                     className="search-inline-input"
+                    data-testid="dashboard-batch-import-file"
                     type="file"
                     accept=".csv,.xlsx,.xlsm,.xls"
                     onChange={(event) => {
@@ -1667,6 +1666,7 @@ export function WorkshopsPage() {
                 <div className="task-row">
                   <button
                     className="route-btn active"
+                    data-testid="dashboard-batch-import-submit"
                     disabled={!batchImportFile || importBatchRunFileMutation.isPending}
                     type="button"
                     onClick={() => {
@@ -1679,7 +1679,7 @@ export function WorkshopsPage() {
                   </button>
                 </div>
                 {importedBatchPreview ? (
-                  <div className="section-note">
+                  <div className="section-note" data-testid="dashboard-batch-import-summary">
                     {t(lang, {
                       zh: `\u5bfc\u5165 ${importedBatchPreview.importedRowCount} \u884c\uff0c\u8df3\u8fc7 ${importedBatchPreview.skippedRowCount} \u884c\uff0c\u5f53\u524d\u5de5\u4f5c\u8868 ${importedBatchPreview.activeSheetName ?? "default"}\uff0c\u8bc6\u522b\u5217\uff1a${importedBatchPreview.detectedColumns.join(", ") || "none"}`,
                       en: `Imported ${importedBatchPreview.importedRowCount} rows, skipped ${importedBatchPreview.skippedRowCount}, active sheet ${importedBatchPreview.activeSheetName ?? "default"}, detected columns: ${importedBatchPreview.detectedColumns.join(", ") || "none"}`,

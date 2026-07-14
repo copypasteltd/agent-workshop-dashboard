@@ -1,5 +1,5 @@
 import { lazy, Suspense, type ReactNode } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AdminShell } from "../AdminShell";
 import { DashboardShell } from "../DashboardShell";
 import { adminRoutes, workspaceRoutes } from "../../lib/routes";
@@ -95,6 +95,24 @@ function withRouteSuspense(node: ReactNode) {
   return <Suspense fallback={<RoutePendingView />}>{node}</Suspense>;
 }
 
+function LegacyDashboardRedirect() {
+  const location = useLocation();
+  const legacyPath = location.pathname.replace(/^\/dashboard(?=\/|$)/, "");
+  const destination =
+    legacyPath === "/providers"
+      ? adminRoutes.providers
+      : legacyPath.length > 0
+        ? `/workspace${legacyPath}`
+        : workspaceRoutes.workshops;
+
+  return (
+    <Navigate
+      to={`${destination}${location.search}${location.hash}`}
+      replace
+    />
+  );
+}
+
 export function AppRouter() {
   const portalElement = withRouteSuspense(<PortalEntryPage />);
   const workshopsElement = withRouteSuspense(<WorkshopsPage />);
@@ -145,28 +163,7 @@ export function AppRouter() {
         <Route path={adminRoutes.providers} element={adminProvidersElement} />
       </Route>
 
-      <Route path="/dashboard" element={<Navigate to={workspaceRoutes.workshops} replace />} />
-      <Route path="/dashboard/workshops/:workshopId" element={<Navigate to={workspaceRoutes.workshops} replace />} />
-      <Route path="/dashboard/services/:serviceId" element={<Navigate to={workspaceRoutes.workshops} replace />} />
-      <Route
-        path="/dashboard/services/:serviceId/batches/:batchJobId"
-        element={<Navigate to={workspaceRoutes.workshops} replace />}
-      />
-      <Route path="/dashboard/instances/:instanceId" element={<Navigate to={workspaceRoutes.instances} replace />} />
-      <Route
-        path="/dashboard/instances/:instanceId/:detailTab"
-        element={<Navigate to={workspaceRoutes.instances} replace />}
-      />
-      <Route path="/dashboard/providers" element={<Navigate to={adminRoutes.providers} replace />} />
-      <Route path="/dashboard/creator/packages/:packageId" element={<Navigate to={workspaceRoutes.creator} replace />} />
-      <Route
-        path="/dashboard/creator/packages/:packageId/debug"
-        element={<Navigate to={workspaceRoutes.creator} replace />}
-      />
-      <Route
-        path="/dashboard/creator/governance/:section"
-        element={<Navigate to={workspaceRoutes.creator} replace />}
-      />
+      <Route path="/dashboard/*" element={<LegacyDashboardRedirect />} />
     </Routes>
   );
 }

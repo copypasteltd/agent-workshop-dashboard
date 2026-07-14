@@ -23,6 +23,7 @@ import { useDashboardUiStore } from "../../stores/dashboardUiStore";
 
 const inputStyle = {
   width: "100%",
+  minWidth: 0,
   minHeight: "40px",
   borderRadius: "12px",
   border: "1px solid var(--line)",
@@ -691,7 +692,7 @@ export function ProvidersPage({ scope = "mixed" }: { scope?: ProviderPageScope }
               setProviderDraft((current) => ({ ...current, baseUrl: event.target.value }))
             }
           />
-          <div style={{ display: "grid", gap: "10px", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+          <div className="providers-form-grid providers-form-grid-2">
             <select
               disabled={!canManagePlatformProviders}
               style={inputStyle}
@@ -721,7 +722,7 @@ export function ProvidersPage({ scope = "mixed" }: { scope?: ProviderPageScope }
               <option value="gateway">gateway</option>
             </select>
           </div>
-          <div style={{ display: "grid", gap: "10px", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+          <div className="providers-form-grid providers-form-grid-2">
             <input
               disabled={!canManagePlatformProviders}
               placeholder={t(lang, l("默认模型", "Default model"))}
@@ -750,7 +751,7 @@ export function ProvidersPage({ scope = "mixed" }: { scope?: ProviderPageScope }
               setProviderDraft((current) => ({ ...current, modelsText: event.target.value }))
             }
           />
-          <div style={{ display: "grid", gap: "10px", gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
+          <div className="providers-form-grid providers-form-grid-3">
             <input
               disabled={!canManagePlatformProviders}
               placeholder="OPENAI_API_KEY"
@@ -993,6 +994,7 @@ export function ProvidersPage({ scope = "mixed" }: { scope?: ProviderPageScope }
     <section className="view" data-testid={`providers-page-${scope}`}>
       <section style={sectionStyle}>
         <div
+          className="providers-hero-grid"
           style={{
             display: "grid",
             gap: "18px",
@@ -1078,6 +1080,7 @@ export function ProvidersPage({ scope = "mixed" }: { scope?: ProviderPageScope }
       </section>
 
       <section
+        className="providers-metric-grid"
         style={{
           display: "grid",
           gap: "16px",
@@ -1096,6 +1099,7 @@ export function ProvidersPage({ scope = "mixed" }: { scope?: ProviderPageScope }
       </section>
 
       <section
+        className="providers-content-grid"
         style={{
           display: "grid",
           gap: "18px",
