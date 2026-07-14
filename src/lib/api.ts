@@ -39,8 +39,55 @@ import {
 } from "@lingban/contracts";
 import { useDashboardAuthStore } from "../stores/dashboardAuthStore";
 
-export const dashboardApiBaseUrl =
-  (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || "http://127.0.0.1:3100";
+type DashboardRuntimeWindow = Window & {
+  __LINGBAN_RUNTIME_CONFIG__?: {
+    apiBaseUrl?: string;
+  };
+};
+
+function normalizeApiBaseUrl(value?: string | null) {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  return trimmed.replace(/\/+$/, "");
+}
+
+function resolveDashboardApiBaseUrl() {
+  if (typeof window !== "undefined") {
+    const runtimeBaseUrl = normalizeApiBaseUrl(
+      (window as DashboardRuntimeWindow).__LINGBAN_RUNTIME_CONFIG__?.apiBaseUrl
+    );
+    if (runtimeBaseUrl) {
+      return runtimeBaseUrl;
+    }
+  }
+
+  const configuredBaseUrl = normalizeApiBaseUrl(import.meta.env.VITE_API_BASE_URL as string | undefined);
+  if (configuredBaseUrl) {
+    return configuredBaseUrl;
+  }
+
+  if (typeof window !== "undefined") {
+    const { protocol, hostname, port, host } = window.location;
+    const isLocalHost = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+
+    if (isLocalHost) {
+      return `${protocol}//${hostname}:3100`;
+    }
+
+    if (port === "38110" || port === "38120") {
+      return `${protocol}//${hostname}:38130`;
+    }
+
+    return `${protocol}//${host}`;
+  }
+
+  return "http://127.0.0.1:3100";
+}
+
+export const dashboardApiBaseUrl = resolveDashboardApiBaseUrl();
 
 function getDashboardAccessToken() {
   return useDashboardAuthStore.getState().tokens?.accessToken;
