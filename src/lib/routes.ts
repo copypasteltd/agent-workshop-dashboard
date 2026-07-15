@@ -25,11 +25,8 @@ export const workspaceRoutes = {
     `/workspace/creator/governance/${section}`,
 };
 
-export const adminRoutes = {
-  root: "/admin",
-  overview: "/admin/overview",
-  providers: "/admin/providers",
-};
+export const adminConsoleUrl =
+  import.meta.env.VITE_ADMIN_CONSOLE_URL?.trim() || "http://192.168.31.20:38140/";
 
 export const dashboardRoutes = {
   ...workspaceRoutes,

@@ -1,8 +1,7 @@
-import { lazy, Suspense, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
-import { AdminShell } from "../AdminShell";
 import { DashboardShell } from "../DashboardShell";
-import { adminRoutes, workspaceRoutes } from "../../lib/routes";
+import { adminConsoleUrl, workspaceRoutes } from "../../lib/routes";
 import { t } from "../../lib/i18n";
 import { useDashboardUiStore } from "../../stores/dashboardUiStore";
 
@@ -31,17 +30,6 @@ const CreatorPage = lazy(async () =>
     default: module.CreatorPage,
   }))
 );
-const AdminOverviewPage = lazy(async () =>
-  import("../../pages/admin/AdminOverviewPage").then((module) => ({
-    default: module.AdminOverviewPage,
-  }))
-);
-const AdminProvidersPage = lazy(async () =>
-  import("../../pages/admin/AdminProvidersPage").then((module) => ({
-    default: module.AdminProvidersPage,
-  }))
-);
-
 function RoutePendingView() {
   const lang = useDashboardUiStore((state) => state.lang);
 
@@ -100,7 +88,7 @@ function LegacyDashboardRedirect() {
   const legacyPath = location.pathname.replace(/^\/dashboard(?=\/|$)/, "");
   const destination =
     legacyPath === "/providers"
-      ? adminRoutes.providers
+      ? workspaceRoutes.settingsProviders
       : legacyPath.length > 0
         ? `/workspace${legacyPath}`
         : workspaceRoutes.workshops;
@@ -113,6 +101,13 @@ function LegacyDashboardRedirect() {
   );
 }
 
+function ExternalAdminRedirect() {
+  useEffect(() => {
+    window.location.replace(adminConsoleUrl);
+  }, []);
+  return <RoutePendingView />;
+}
+
 export function AppRouter() {
   const portalElement = withRouteSuspense(<PortalEntryPage />);
   const workshopsElement = withRouteSuspense(<WorkshopsPage />);
@@ -121,8 +116,6 @@ export function AppRouter() {
     <WorkspaceProviderBindingsPage />
   );
   const creatorElement = withRouteSuspense(<CreatorPage />);
-  const adminOverviewElement = withRouteSuspense(<AdminOverviewPage />);
-  const adminProvidersElement = withRouteSuspense(<AdminProvidersPage />);
 
   return (
     <Routes>
@@ -157,11 +150,7 @@ export function AppRouter() {
         <Route path="/creator/:packageId" element={creatorElement} />
       </Route>
 
-      <Route element={<AdminShell />}>
-        <Route path={adminRoutes.root} element={<Navigate to={adminRoutes.overview} replace />} />
-        <Route path={adminRoutes.overview} element={adminOverviewElement} />
-        <Route path={adminRoutes.providers} element={adminProvidersElement} />
-      </Route>
+      <Route path="/admin/*" element={<ExternalAdminRedirect />} />
 
       <Route path="/dashboard/*" element={<LegacyDashboardRedirect />} />
     </Routes>

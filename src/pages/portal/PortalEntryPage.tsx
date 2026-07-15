@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { dashboardAssets } from "../../data/dashboardData";
-import { adminRoutes, workspaceRoutes } from "../../lib/routes";
+import { adminConsoleUrl, workspaceRoutes } from "../../lib/routes";
 import { t } from "../../lib/i18n";
 import { useDashboardAuthStore } from "../../stores/dashboardAuthStore";
 import { useDashboardUiStore } from "../../stores/dashboardUiStore";
@@ -52,7 +52,8 @@ export function PortalEntryPage() {
             </div>
           </Link>
 
-          <Link className="detail-card" to={adminRoutes.overview}>
+          {platformAccess?.isPlatformAdmin ? (
+          <a className="detail-card" href={adminConsoleUrl}>
             <div className="eyebrow">admin://overview</div>
             <div className="detail-title">
               {t(lang, { zh: "平台 Admin Console", en: "Platform admin console" })}
@@ -64,10 +65,11 @@ export function PortalEntryPage() {
               })}
             </div>
             <div className="pill-row">
-              <span className="pill active">{adminRoutes.overview}</span>
-              <span className="pill">{adminRoutes.providers}</span>
+              <span className="pill active">{adminConsoleUrl}</span>
+              <span className="pill">独立管理会话</span>
             </div>
-          </Link>
+          </a>
+          ) : null}
         </div>
 
         {authenticated ? (
