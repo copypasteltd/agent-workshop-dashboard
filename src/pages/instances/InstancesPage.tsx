@@ -32,6 +32,7 @@ import {
 } from "../../lib/workspaceContext";
 import { useDashboardAuthStore } from "../../stores/dashboardAuthStore";
 import { useDashboardUiStore } from "../../stores/dashboardUiStore";
+import { SessionCaptureDrawer } from "./SessionCaptureDrawer";
 
 const instanceTabs: Array<{ key: InstanceTab; label: { zh: string; en: string } }> = [
   { key: "overview", label: { zh: "概览", en: "Overview" } },
@@ -1606,6 +1607,7 @@ export function InstancesPage() {
   >({});
   const [composerError, setComposerError] = useState("");
   const [reviewError, setReviewError] = useState("");
+  const [captureDrawerOpen, setCaptureDrawerOpen] = useState(false);
   const [reviewFormsByAnswerId, setReviewFormsByAnswerId] = useState<
     Record<string, ReviewFormState>
   >({});
@@ -1722,6 +1724,7 @@ export function InstancesPage() {
     setComposerError("");
     setReviewError("");
     setReviewFormsByAnswerId({});
+    setCaptureDrawerOpen(false);
   }, [instance?.id]);
 
   const approvalMutation = useMutation({
@@ -2157,6 +2160,20 @@ export function InstancesPage() {
                     <div className="meta">{t(lang, instance.summary)}</div>
                   </div>
                   <div className="pill-row">
+                    {liveSnapshot ? (
+                      <button
+                        className="route-btn active session-capture-trigger"
+                        type="button"
+                        data-testid="dashboard-instance-capture-session"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          setCaptureDrawerOpen(true);
+                        }}
+                      >
+                        <svg className="icon"><use href="#i-archive" /></svg>
+                        {t(lang, { zh: "固化会话", en: "Capture session" })}
+                      </button>
+                    ) : null}
                     <span className={`pill ${instance.statusClass}`}>{t(lang, instance.status)}</span>
                     <span className="pill active">{t(lang, instance.workspace)}</span>
                   </div>
@@ -2847,6 +2864,14 @@ export function InstancesPage() {
           </article>
         </div>
       </div>
+      {liveSnapshot ? (
+        <SessionCaptureDrawer
+          open={captureDrawerOpen}
+          run={liveSnapshot}
+          lang={lang}
+          onClose={() => setCaptureDrawerOpen(false)}
+        />
+      ) : null}
     </section>
   );
 }

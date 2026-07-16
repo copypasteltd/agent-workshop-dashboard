@@ -9,6 +9,9 @@ import {
   createNotificationsApiClient,
   createQuotaApiClient,
   createRunsApiClient,
+  createSessionCapturesApiClient,
+  createSessionDraftsApiClient,
+  createSessionVersionsApiClient,
   createSearchApiClient,
   createSessionsApiClient,
   createSessionRefreshFetch,
@@ -118,6 +121,24 @@ export const dashboardAuthApi = createAuthApiClient({
 });
 
 export const dashboardRunsApi = createRunsApiClient({
+  baseUrl: dashboardApiBaseUrl,
+  fetcher: dashboardAuthFetch,
+  getAccessToken: getDashboardAccessToken,
+});
+
+export const dashboardSessionCapturesApi = createSessionCapturesApiClient({
+  baseUrl: dashboardApiBaseUrl,
+  fetcher: dashboardAuthFetch,
+  getAccessToken: getDashboardAccessToken,
+});
+
+export const dashboardSessionDraftsApi = createSessionDraftsApiClient({
+  baseUrl: dashboardApiBaseUrl,
+  fetcher: dashboardAuthFetch,
+  getAccessToken: getDashboardAccessToken,
+});
+
+export const dashboardSessionVersionsApi = createSessionVersionsApiClient({
   baseUrl: dashboardApiBaseUrl,
   fetcher: dashboardAuthFetch,
   getAccessToken: getDashboardAccessToken,

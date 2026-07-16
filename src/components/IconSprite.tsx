@@ -18,6 +18,13 @@ export function IconSprite() {
       <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 21L4.9 13.9A5 5 0 0 1 12 6.8L12 7.8L13 6.8A5 5 0 0 1 20.1 13.9L12 21Z" /></symbol>
       <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="M6 9L12 15L18 9" /></symbol>
       <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6L18 18" /><path d="M18 6L6 18" /></symbol>
+      <symbol id="i-archive" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="4" rx="1" /><path d="M5 8V19C5 20.1 5.9 21 7 21H17C18.1 21 19 20.1 19 19V8" /><path d="M10 12H14" /></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3V15" /><path d="M7 10L12 15L17 10" /><path d="M5 20H19" /></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5L9.5 17L19 7.5" /></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11A8 8 0 0 0 6.2 6L4 8" /><path d="M4 4V8H8" /><path d="M4 13A8 8 0 0 0 17.8 18L20 16" /><path d="M20 20V16H16" /></symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V7A4 4 0 0 1 16 7V10" /><path d="M12 14V17" /></symbol>
+      <symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="M19 12H5" /><path d="M11 6L5 12L11 18" /></symbol>
+      <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12H19" /><path d="M13 6L19 12L13 18" /></symbol>
     </svg>
   );
 }

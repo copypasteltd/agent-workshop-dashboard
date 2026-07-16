@@ -76,3 +76,12 @@ Local scripts use Node.js, pnpm, Vite, and a browser only. They do not start Doc
 - 图标统一使用现代扁平图标体系，并提供可访问名称。
 
 The Dashboard and Admin Console have independent interface, route, build, session, and deployment boundaries.
+
+## Session Control / Session Control
+
+- Instance pages open `SessionCaptureDrawer` for terminal or completed-turn checkpoint capture.
+- Creator opens `SessionAssetWorkbench` for Capture selection, Draft revision, redaction review, Replay Gate, sealing, and Package binding.
+- Raw Capture objects require an access reason and display the latest audited access records.
+- The workbench renders as three columns on desktop, two columns on narrow desktop, and one column at the smallest supported viewport.
+
+Verification completed on `1440x1000`, `1024x768`, and `390x844` without horizontal overflow. The complete Dashboard/Admin/H5 E2E suite passes `32/32`.

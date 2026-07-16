@@ -43,6 +43,7 @@ import {
 } from "../../lib/workspaceContext";
 import { CreatorGovernancePanel, type GovernanceMeta } from "./CreatorGovernancePanel";
 import { CreatorReleasePanel, CreatorReplayPanel } from "./CreatorReleasePanels";
+import { SessionAssetWorkbench } from "./SessionAssetWorkbench";
 import { useDashboardAuthStore } from "../../stores/dashboardAuthStore";
 import { useDashboardUiStore } from "../../stores/dashboardUiStore";
 
@@ -5852,6 +5853,7 @@ function CreatorOperationsRail({
 }
 
 export function CreatorPage() {
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
   const { packageId, section } = useParams();
@@ -6252,6 +6254,20 @@ export function CreatorPage() {
           </div>
         </article>
 
+        <SessionAssetWorkbench
+          enabled={dataQueriesEnabled}
+          packageId={null}
+          workspaceContextKey={currentWorkspace.id}
+          availableServices={catalogServices}
+          availableWorkshops={catalogWorkshops}
+          lang={lang}
+          onPackageCreated={(createdPackageId) => {
+            void queryClient.invalidateQueries({ queryKey: ["dashboard", "creator", "packages"] });
+            setActivePackageId(createdPackageId);
+            navigate(dashboardRoutes.creatorPackage(createdPackageId));
+          }}
+        />
+
         <div className="creator-layout">
           <div className="conversation-stack">
             <article className="filter-card">
@@ -6331,6 +6347,15 @@ export function CreatorPage() {
           ))}
         </div>
       </article>
+
+      <SessionAssetWorkbench
+        enabled={dataQueriesEnabled}
+        packageId={pkg.id}
+        workspaceContextKey={currentWorkspace.id}
+        availableServices={catalogServices}
+        availableWorkshops={catalogWorkshops}
+        lang={lang}
+      />
 
       <div className="creator-layout">
         <div className="conversation-stack">
