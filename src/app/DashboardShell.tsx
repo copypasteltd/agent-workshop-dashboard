@@ -595,7 +595,7 @@ export function DashboardShell() {
       label: `workspace://settings/providers/${currentWorkspace.id}`,
       title: t(lang, { zh: "设置", en: "Settings" }),
       desc: t(lang, {
-        zh: "鍦ㄥ悗鍙版帶鍒剁涓夋柟 OpenAI-compatible Provider銆侀粯璁ゆā鍨嬪拰宸ヤ綔鍖虹粦瀹氾紝鏂板缓 run 浼氬湪鍚姩鏃跺喅瀹氬疄闄呬笂娓告簮銆?",
+        zh: "在总管理后台配置第三方 OpenAI-compatible Provider、默认模型和工作区绑定；新建实例在启动时解析实际模型上游。",
         en: "This entry handles only workspace-level model routing and provider bindings, including visible upstreams, default routes, credential mounts, and model override policy.",
       }),
     },

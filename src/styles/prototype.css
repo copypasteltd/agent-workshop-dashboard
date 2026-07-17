@@ -959,10 +959,25 @@
       color: var(--muted);
     }
 
-    .instance-layout {
-      grid-template-columns: 300px 1fr 336px;
-      min-height: 720px;
-    }
+.instance-layout {
+  grid-template-columns: minmax(260px, 300px) minmax(0, 1fr) minmax(280px, 336px);
+  min-height: 720px;
+}
+
+.instance-layout > *,
+.detail-stack > *,
+.governance-stack > *,
+.detail-item > * {
+  min-width: 0;
+}
+
+.detail-stack .meta,
+.detail-stack .file-name,
+.governance-stack .meta,
+.governance-stack .file-name {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 
     .list-card.active,
     .package-card.active {

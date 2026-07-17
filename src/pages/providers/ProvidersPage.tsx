@@ -251,10 +251,18 @@ function bindingSummary(
   const credential = credentialLookup.get(binding.credentialId);
   return {
     providerLabel: provider ? provider.displayName : binding.providerId,
-    credentialLabel: credential ? credential.displayName : binding.credentialId,
-    note: binding.isDefault
-      ? t(lang, l("默认运行链路", "Default runtime route"))
-      : t(lang, l("备选可选链路", "Alternate selectable route")),
+    credentialLabel:
+      binding.scope === "platform"
+        ? t(lang, l("平台托管凭证", "Platform-managed credential"))
+        : credential
+          ? credential.displayName
+          : binding.credentialId,
+    note:
+      binding.scope === "platform"
+        ? t(lang, l("由平台总管理配置，当前工作区自动继承。", "Configured by platform administration and inherited by this workspace."))
+        : binding.isDefault
+          ? t(lang, l("工作区默认运行链路", "Workspace default runtime route"))
+          : t(lang, l("工作区备选链路", "Workspace alternate route")),
   };
 }
 
@@ -1306,6 +1314,11 @@ export function ProvidersPage({ scope = "mixed" }: { scope?: ProviderPageScope }
                           : t(lang, l("备选链路", "Alternate route"))}
                       </span>
                       <span className="path-chip">
+                        {binding.scope === "platform"
+                          ? t(lang, l("平台继承", "Platform inherited"))
+                          : t(lang, l("工作区绑定", "Workspace binding"))}
+                      </span>
+                      <span className="path-chip">
                         {t(lang, l(`优先级 ${binding.priority}`, `Priority ${binding.priority}`))}
                       </span>
                       <span className="path-chip">
@@ -1321,7 +1334,7 @@ export function ProvidersPage({ scope = "mixed" }: { scope?: ProviderPageScope }
                       <button
                         type="button"
                         style={actionButtonStyle}
-                        disabled={!canManageWorkspaceBindings}
+                        disabled={!canManageWorkspaceBindings || binding.scope === "platform"}
                         onClick={() => {
                           setEditingBindingId(binding.bindingId);
                           setBindingDraft(bindingDraftFromRecord(binding));
@@ -1332,7 +1345,11 @@ export function ProvidersPage({ scope = "mixed" }: { scope?: ProviderPageScope }
                       <button
                         type="button"
                         style={actionButtonStyle}
-                        disabled={updateBindingMutation.isPending || !canManageWorkspaceBindings}
+                        disabled={
+                          updateBindingMutation.isPending ||
+                          !canManageWorkspaceBindings ||
+                          binding.scope === "platform"
+                        }
                         onClick={() =>
                           updateBindingMutation.mutate({
                             bindingId: binding.bindingId,

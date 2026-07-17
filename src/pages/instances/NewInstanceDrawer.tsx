@@ -84,12 +84,24 @@ export function NewInstanceDrawer({
     setDefaultsApplied(true);
   }, [defaultsApplied, mcpBindingsQuery.data, mcpsQuery.data, open]);
 
-  const availableProviders = (providerBindingsQuery.data ?? [])
-    .map((binding) => ({
-      binding,
-      provider: providersQuery.data?.find((provider) => provider.providerId === binding.providerId),
-    }))
-    .filter((item) => Boolean(item.provider));
+  const availableProviders = [
+    ...new Map(
+      [...(providerBindingsQuery.data ?? [])]
+        .sort((left, right) => {
+          if (left.scope === right.scope) return left.priority - right.priority;
+          return left.scope === "workspace" ? -1 : 1;
+        })
+        .map((binding) => [
+          binding.providerId,
+          {
+            binding,
+            provider: providersQuery.data?.find(
+              (provider) => provider.providerId === binding.providerId
+            ),
+          },
+        ])
+    ).values(),
+  ].filter((item) => Boolean(item.provider));
   const selectedProvider = providersQuery.data?.find((provider) => provider.providerId === providerId) ?? null;
 
   const createMutation = useMutation({
@@ -139,7 +151,12 @@ export function NewInstanceDrawer({
     mcpsQuery.error ??
     mcpBindingsQuery.error ??
     credentialsQuery.error;
-  const canSubmit = name.trim().length > 0 && capabilityConfigReady && !createMutation.isPending;
+  const providerRouteReady = availableProviders.length > 0;
+  const canSubmit =
+    name.trim().length > 0 &&
+    capabilityConfigReady &&
+    providerRouteReady &&
+    !createMutation.isPending;
 
   return (
     <div className="session-capture-layer" role="presentation">
@@ -221,8 +238,8 @@ export function NewInstanceDrawer({
               <label className="capture-field">
                 <span>Provider</span>
                 <select value={providerId} onChange={(event) => { setProviderId(event.target.value); setModel(""); }}>
-                  <option value="">{t(lang, { zh: "工作区默认路由", en: "Workspace default route" })}</option>
-                  {availableProviders.map(({ binding, provider }) => provider ? <option value={provider.providerId} key={binding.bindingId}>{provider.displayName}{binding.isDefault ? " / Default" : ""}</option> : null)}
+                  <option value="">{t(lang, { zh: "当前有效默认路由", en: "Effective default route" })}</option>
+                  {availableProviders.map(({ binding, provider }) => provider ? <option value={provider.providerId} key={binding.bindingId}>{provider.displayName}{binding.isDefault ? " / Default" : ""}{binding.scope === "platform" ? " / Platform" : " / Workspace"}</option> : null)}
                 </select>
               </label>
               {selectedProvider ? <label className="capture-field">
@@ -272,6 +289,14 @@ export function NewInstanceDrawer({
               {t(lang, { zh: "运行能力配置加载失败，请刷新后重试。", en: "Runtime capability configuration failed to load. Refresh and retry." })}
             </div>
           ) : null}
+          {capabilityConfigReady && !providerRouteReady ? (
+            <div className="capture-alert warn" role="alert">
+              <span>{t(lang, { zh: "当前工作区没有可用 Provider 路由，请先完成 Provider 凭证绑定。", en: "No Provider route is available. Configure a Provider credential binding first." })}</span>
+              <a className="route-btn" href="/workspace/settings/providers">
+                {t(lang, { zh: "前往 Provider 设置", en: "Open Provider settings" })}
+              </a>
+            </div>
+          ) : null}
         </div>
 
         <footer className="session-capture-footer">
@@ -290,6 +315,8 @@ export function NewInstanceDrawer({
               ? t(lang, { zh: "正在启动", en: "Starting" })
               : !capabilityConfigReady
                 ? t(lang, { zh: "正在加载能力", en: "Loading capabilities" })
+                : !providerRouteReady
+                  ? t(lang, { zh: "需要 Provider 路由", en: "Provider route required" })
                 : t(lang, { zh: "启动空白 Codex", en: "Start blank Codex" })}
           </button>
         </footer>
