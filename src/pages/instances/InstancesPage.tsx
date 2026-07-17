@@ -1770,6 +1770,29 @@ export function InstancesPage() {
     },
   });
 
+  const approvalModeMutation = useMutation({
+    mutationFn: async (approvalMode: "manual" | "auto_all") => {
+      if (!instance) {
+        throw new Error(t(lang, { zh: "当前没有可配置的实例。", en: "No instance is available." }));
+      }
+      return await dashboardRunsApi.setRunApprovalMode(instance.id, { approvalMode });
+    },
+    onSuccess: async (snapshot) => {
+      if (instance) {
+        queryClient.setQueryData(["dashboard", "runs", instance.id], snapshot);
+      }
+      setComposerError("");
+      await queryClient.invalidateQueries({ queryKey: ["dashboard", "runs"] });
+    },
+    onError: (error) => {
+      setComposerError(
+        error instanceof Error
+          ? error.message
+          : t(lang, { zh: "自动审批设置更新失败。", en: "Failed to update automatic approval." })
+      );
+    },
+  });
+
   const reviewMutation = useMutation({
     mutationFn: async (input: {
       answer: ReviewableInformationAnswer;
@@ -2696,6 +2719,29 @@ export function InstancesPage() {
                   })}
                 />
                 {composerError ? <div className="composer-error">{composerError}</div> : null}
+                <div className="approval-mode-control" data-testid="dashboard-approval-mode-control">
+                  <div>
+                    <strong>{t(lang, { zh: "全自动审批", en: "Automatic approval" })}</strong>
+                    <span>
+                      {liveSnapshot?.run.approvalMode === "auto_all"
+                        ? t(lang, { zh: "所有审批请求将自动通过", en: "All approval requests are accepted automatically" })
+                        : t(lang, { zh: "敏感操作等待人工确认", en: "Sensitive actions wait for confirmation" })}
+                    </span>
+                  </div>
+                  <label className="approval-mode-switch">
+                    <input
+                      data-testid="dashboard-approval-mode-toggle"
+                      type="checkbox"
+                      checked={liveSnapshot?.run.approvalMode === "auto_all"}
+                      disabled={approvalModeMutation.isPending}
+                      onChange={(event) => {
+                        setComposerError("");
+                        approvalModeMutation.mutate(event.target.checked ? "auto_all" : "manual");
+                      }}
+                    />
+                    <span aria-hidden="true" />
+                  </label>
+                </div>
                 {attachmentDrafts.length > 0 ? (
                   <div className="attachment-draft-list" data-testid="dashboard-instance-attachment-drafts">
                     {attachmentDrafts.map((attachment) => (

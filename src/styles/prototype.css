@@ -1870,6 +1870,90 @@
 
     .capture-toggle { display: flex; align-items: center; gap: 10px; color: var(--text); font-size: 13px; }
     .capture-toggle input { width: 17px; height: 17px; accent-color: var(--accent); }
+
+    .approval-mode-control {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-top: 10px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+    }
+
+    .approval-mode-control strong,
+    .approval-mode-control span {
+      display: block;
+    }
+
+    .approval-mode-control strong {
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .approval-mode-control > div > span {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .approval-mode-switch {
+      position: relative;
+      flex: 0 0 auto;
+      width: 38px;
+      height: 22px;
+    }
+
+    .approval-mode-switch input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .approval-mode-switch > span {
+      position: absolute;
+      inset: 0;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface-3);
+      cursor: pointer;
+      transition: background 160ms ease, border-color 160ms ease;
+    }
+
+    .approval-mode-switch > span::after {
+      content: "";
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--muted);
+      transition: transform 160ms ease, background 160ms ease;
+    }
+
+    .approval-mode-switch input:checked + span {
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 22%, var(--surface-3));
+    }
+
+    .approval-mode-switch input:checked + span::after {
+      background: var(--accent);
+      transform: translateX(16px);
+    }
+
+    .approval-mode-switch input:focus-visible + span {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .approval-mode-switch input:disabled + span {
+      cursor: wait;
+      opacity: 0.55;
+    }
     .capture-alert {
       display: flex;
       align-items: flex-start;
