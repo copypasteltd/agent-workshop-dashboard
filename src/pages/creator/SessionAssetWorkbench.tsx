@@ -8,9 +8,11 @@ import type {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import {
+  dashboardCatalogApi,
   dashboardSessionCapturesApi,
   dashboardCreatorApi,
   dashboardSessionDraftsApi,
+  dashboardSessionProjectsApi,
   dashboardSessionVersionsApi,
 } from "../../lib/api";
 import { t } from "../../lib/i18n";
@@ -64,6 +66,12 @@ export function SessionAssetWorkbench({
   const [newPackageDescription, setNewPackageDescription] = useState("");
   const [newPackageServiceIds, setNewPackageServiceIds] = useState<string[]>([]);
   const [newPackageWorkshopIds, setNewPackageWorkshopIds] = useState<string[]>([]);
+  const [newWorkshopAudience, setNewWorkshopAudience] = useState("");
+  const [newServiceAuthRequirements, setNewServiceAuthRequirements] = useState("");
+  const [newServiceOutputContract, setNewServiceOutputContract] = useState("");
+  const [newServiceTargetPath, setNewServiceTargetPath] = useState("/workspace/output/");
+  const [newServiceDuration, setNewServiceDuration] = useState("05-15 min");
+  const [newWorkshopTags, setNewWorkshopTags] = useState("");
   const [rawAccessReason, setRawAccessReason] = useState("");
 
   const capturesQuery = useQuery({
@@ -76,6 +84,12 @@ export function SessionAssetWorkbench({
     enabled,
     queryKey: ["dashboard", "creator", "session-drafts"],
     queryFn: async () => (await dashboardSessionDraftsApi.list()).items,
+    refetchInterval: 15_000,
+  });
+  const projectsQuery = useQuery({
+    enabled,
+    queryKey: ["dashboard", "creator", "session-projects", "asset-workbench"],
+    queryFn: async () => (await dashboardSessionProjectsApi.list({ limit: 200 })).items,
     refetchInterval: 15_000,
   });
   const bindingsQuery = useQuery({
@@ -114,6 +128,11 @@ export function SessionAssetWorkbench({
     (replay) => replay.revisionId === latestRevision?.revisionId
   ) ?? null;
   const latestVersion = detailQuery.data?.versions[0] ?? null;
+  const activeSessionProject = (projectsQuery.data ?? []).find((project) =>
+    project.currentCaptureId === selectedCaptureId ||
+    project.currentDraftId === selectedDraftId ||
+    (latestVersion && project.currentSessionVersionId === latestVersion.sessionVersionId)
+  ) ?? null;
   const draftByCapture = useMemo(
     () => new Map((draftsQuery.data ?? []).map((draft) => [draft.sourceCaptureId, draft])),
     [draftsQuery.data]
@@ -126,6 +145,8 @@ export function SessionAssetWorkbench({
       queryClient.invalidateQueries({ queryKey: ["dashboard", "creator", "session-draft"] }),
       queryClient.invalidateQueries({ queryKey: ["dashboard", "creator", "session-bindings"] }),
       queryClient.invalidateQueries({ queryKey: ["dashboard", "creator", "packages"] }),
+      queryClient.invalidateQueries({ queryKey: ["dashboard", "creator", "session-projects"] }),
+      queryClient.invalidateQueries({ queryKey: ["dashboard", "catalog"] }),
     ]);
   };
 
@@ -225,16 +246,57 @@ export function SessionAssetWorkbench({
       const normalizedPackageId = newPackageId.trim().toLowerCase();
       const title = newPackageTitle.trim();
       const description = newPackageDescription.trim() || title;
+      const bundle = activeSessionProject
+        ? await dashboardCatalogApi.createWorkshopServiceBundle({
+            sessionProjectId: activeSessionProject.sessionProjectId,
+            displayName: { zh: title, en: title },
+            summary: { zh: description, en: description },
+            audience: {
+              zh: newWorkshopAudience.trim() || "当前工作区成员",
+              en: newWorkshopAudience.trim() || "Members of the current workspace",
+            },
+            nextStepSummary: {
+              zh: "实例化后进入完整对话，由 Agent 主动收集执行所需信息。",
+              en: "Launches a full conversation where the Agent collects required execution inputs.",
+            },
+            scope: "personal",
+            visibility: "workspace",
+            coverAssetUrl: "/assets/logo.svg",
+            tagList: newWorkshopTags.split(",").map((item) => item.trim()).filter(Boolean),
+            service: {
+              displayName: { zh: title, en: title },
+              summary: { zh: description, en: description },
+              authRequirementText: {
+                zh: newServiceAuthRequirements.trim() || "使用工作区已绑定的 MCP 与凭证",
+                en: newServiceAuthRequirements.trim() || "Uses MCPs and credentials bound to the workspace",
+              },
+              estimatedDuration: newServiceDuration.trim(),
+              targetPathHint: newServiceTargetPath.trim(),
+              outputContractSummary: {
+                zh: newServiceOutputContract.trim() || "输出文件写入实例 Target Path。",
+                en: newServiceOutputContract.trim() || "Output files are written to the instance Target Path.",
+              },
+              requiredBindings: {
+                firstPartyMcpIds: [],
+                externalConnectorRefs: [],
+                credentialIds: [],
+              },
+              linkedInstanceHint: activeSessionProject.sourceRunId,
+            },
+          })
+        : null;
       const created = await dashboardCreatorApi.createPackage({
         packageId: normalizedPackageId,
         title: { zh: title, en: title },
         description: { zh: description, en: description },
         workspaceContextKey,
-        linkedWorkshopIds: newPackageWorkshopIds,
-        linkedServiceIds: newPackageServiceIds,
-        currentTaskVersionId: detailQuery.data?.session?.taskFamily?.startsWith("tsv_")
-          ? detailQuery.data.session.taskFamily
-          : null,
+        linkedWorkshopIds: bundle ? [bundle.workshop.workshopId] : newPackageWorkshopIds,
+        linkedServiceIds: bundle ? [bundle.service.serviceId] : newPackageServiceIds,
+        currentTaskVersionId: bundle?.taskVersion.taskVersionId ?? (
+          detailQuery.data?.session?.taskFamily?.startsWith("tsv_")
+            ? detailQuery.data.session.taskFamily
+            : null
+        ),
       });
       await dashboardSessionVersionsApi.bindPackage(created.packageId, {
         sessionVersionId: latestVersion.sessionVersionId,
@@ -366,9 +428,21 @@ export function SessionAssetWorkbench({
               <label className="capture-field"><span>Package ID</span><input value={newPackageId} onChange={(event) => setNewPackageId(event.target.value)} placeholder="tax-filing-2026" /></label>
               <label className="capture-field"><span>{t(lang, { zh: "名称", en: "Title" })}</span><input value={newPackageTitle} onChange={(event) => setNewPackageTitle(event.target.value)} /></label>
               <label className="capture-field"><span>{t(lang, { zh: "说明", en: "Description" })}</span><input value={newPackageDescription} onChange={(event) => setNewPackageDescription(event.target.value)} /></label>
-              {availableWorkshops.length > 0 ? <fieldset className="session-package-options"><legend>{t(lang, { zh: "关联工坊", en: "Linked workshops" })}</legend>{availableWorkshops.map((workshop) => <label key={workshop.workshopId}><input type="checkbox" checked={newPackageWorkshopIds.includes(workshop.workshopId)} onChange={(event) => setNewPackageWorkshopIds((current) => event.target.checked ? [...current, workshop.workshopId] : current.filter((id) => id !== workshop.workshopId))} /><span>{workshop.displayName[lang]}</span></label>)}</fieldset> : null}
-              {availableServices.length > 0 ? <fieldset className="session-package-options"><legend>{t(lang, { zh: "关联服务", en: "Linked services" })}</legend>{availableServices.map((service) => <label key={service.serviceId}><input type="checkbox" checked={newPackageServiceIds.includes(service.serviceId)} onChange={(event) => setNewPackageServiceIds((current) => event.target.checked ? [...current, service.serviceId] : current.filter((id) => id !== service.serviceId))} /><span>{service.displayName[lang]}</span></label>)}</fieldset> : null}
-              <button className="route-btn active" type="button" disabled={createPackageMutation.isPending || !/^[a-z0-9][a-z0-9-]{1,118}[a-z0-9]$/.test(newPackageId.trim().toLowerCase()) || !newPackageTitle.trim()} onClick={() => createPackageMutation.mutate()}>{t(lang, { zh: "创建并绑定", en: "Create and bind" })}</button>
+              {activeSessionProject ? <div className="session-catalog-bundle-fields">
+                <div className="session-version-line"><span>Session Project</span><strong className="mono">{activeSessionProject.sessionProjectId}</strong><em>{activeSessionProject.status}</em></div>
+                <label className="capture-field"><span>{t(lang, { zh: "适用对象", en: "Audience" })}</span><input value={newWorkshopAudience} onChange={(event) => setNewWorkshopAudience(event.target.value)} placeholder={t(lang, { zh: "财务团队、内容团队或个人 Creator", en: "Finance teams, content teams, or individual creators" })} /></label>
+                <label className="capture-field"><span>{t(lang, { zh: "所需授权", en: "Required authorization" })}</span><input value={newServiceAuthRequirements} onChange={(event) => setNewServiceAuthRequirements(event.target.value)} placeholder={t(lang, { zh: "列出 MCP、账户和私有凭证要求", en: "List MCP, account, and private credential requirements" })} /></label>
+                <label className="capture-field"><span>{t(lang, { zh: "输出约定", en: "Output contract" })}</span><input value={newServiceOutputContract} onChange={(event) => setNewServiceOutputContract(event.target.value)} placeholder={t(lang, { zh: "输出文件、目录和回执约定", en: "Output files, directories, and receipt contract" })} /></label>
+                <div className="session-catalog-grid">
+                  <label className="capture-field"><span>Target Path</span><input value={newServiceTargetPath} onChange={(event) => setNewServiceTargetPath(event.target.value)} /></label>
+                  <label className="capture-field"><span>{t(lang, { zh: "预计时长", en: "Estimated duration" })}</span><input value={newServiceDuration} onChange={(event) => setNewServiceDuration(event.target.value)} /></label>
+                </div>
+                <label className="capture-field"><span>{t(lang, { zh: "标签", en: "Tags" })}</span><input value={newWorkshopTags} onChange={(event) => setNewWorkshopTags(event.target.value)} placeholder={t(lang, { zh: "使用英文逗号分隔", en: "Separate with commas" })} /></label>
+                <div className="section-note">{t(lang, { zh: "提交后创建草稿工坊、服务、不可变 Task Version、Package 和候选 Session Binding。", en: "Submission creates a draft workshop, service, immutable Task Version, Package, and candidate Session Binding." })}</div>
+              </div> : null}
+              {!activeSessionProject && availableWorkshops.length > 0 ? <fieldset className="session-package-options"><legend>{t(lang, { zh: "关联工坊", en: "Linked workshops" })}</legend>{availableWorkshops.map((workshop) => <label key={workshop.workshopId}><input type="checkbox" checked={newPackageWorkshopIds.includes(workshop.workshopId)} onChange={(event) => setNewPackageWorkshopIds((current) => event.target.checked ? [...current, workshop.workshopId] : current.filter((id) => id !== workshop.workshopId))} /><span>{workshop.displayName[lang]}</span></label>)}</fieldset> : null}
+              {!activeSessionProject && availableServices.length > 0 ? <fieldset className="session-package-options"><legend>{t(lang, { zh: "关联服务", en: "Linked services" })}</legend>{availableServices.map((service) => <label key={service.serviceId}><input type="checkbox" checked={newPackageServiceIds.includes(service.serviceId)} onChange={(event) => setNewPackageServiceIds((current) => event.target.checked ? [...current, service.serviceId] : current.filter((id) => id !== service.serviceId))} /><span>{service.displayName[lang]}</span></label>)}</fieldset> : null}
+              <button className="route-btn active" type="button" disabled={createPackageMutation.isPending || !/^[a-z0-9][a-z0-9-]{1,118}[a-z0-9]$/.test(newPackageId.trim().toLowerCase()) || !newPackageTitle.trim() || (Boolean(activeSessionProject) && (!newServiceTargetPath.trim() || !newServiceDuration.trim()))} onClick={() => createPackageMutation.mutate()}>{createPackageMutation.isPending ? t(lang, { zh: "正在封装...", en: "Packaging..." }) : t(lang, { zh: "创建并绑定", en: "Create and bind" })}</button>
             </div> : null}
           </div> : <div className="session-asset-empty">{t(lang, { zh: "选择 Draft 后执行安全审核", en: "Select a Draft to run the security review" })}</div>}
         </section>

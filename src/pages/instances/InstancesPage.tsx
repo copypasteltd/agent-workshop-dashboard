@@ -33,6 +33,7 @@ import {
 import { useDashboardAuthStore } from "../../stores/dashboardAuthStore";
 import { useDashboardUiStore } from "../../stores/dashboardUiStore";
 import { SessionCaptureDrawer } from "./SessionCaptureDrawer";
+import { NewInstanceDrawer } from "./NewInstanceDrawer";
 
 const instanceTabs: Array<{ key: InstanceTab; label: { zh: string; en: string } }> = [
   { key: "overview", label: { zh: "概览", en: "Overview" } },
@@ -1314,6 +1315,7 @@ export function InstancesPage() {
   const [listMode, setListMode] = useState<InstanceListMode>("all");
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "warn" | "success">("all");
   const [tagFilter, setTagFilter] = useState("all");
+  const [newInstanceOpen, setNewInstanceOpen] = useState(false);
   const currentWorkspace = useMemo(
     () =>
       resolveDashboardWorkspaceView({
@@ -1974,7 +1976,16 @@ export function InstancesPage() {
             <div className="eyebrow">{t(lang, { zh: "实例筛选", en: "Instance Filters" })}</div>
             <h3 className="detail-title">{t(lang, { zh: "多任务列表", en: "Multi-run list" })}</h3>
           </div>
-          <span className="pill active">{t(lang, { zh: "实例为中心", en: "Instance-centric" })}</span>
+          <button
+            className="route-btn active"
+            data-testid="dashboard-new-instance"
+            type="button"
+            disabled={!workspaceDataReady}
+            onClick={() => setNewInstanceOpen(true)}
+          >
+            <svg className="icon"><use href="#i-terminal" /></svg>
+            {t(lang, { zh: "新建实例", en: "New instance" })}
+          </button>
         </div>
         <label className="fake-input">
           <svg
@@ -2082,10 +2093,16 @@ export function InstancesPage() {
               <div className="list-title">{t(lang, { zh: "没有匹配实例", en: "No matched instances" })}</div>
               <div className="section-note">
                 {t(lang, {
-                  zh: "可以清空搜索词，或切换状态筛选。当前打开的实例不会因为筛选而被关闭。",
-                  en: "Clear the query or switch the status filter. The currently open instance stays active.",
+                  zh: instanceDataMode === "empty" ? "创建一个空白 Codex，或清空筛选条件。" : "可以清空搜索词，或切换状态筛选。当前打开的实例不会因为筛选而被关闭。",
+                  en: instanceDataMode === "empty" ? "Create a blank Codex or clear the filters." : "Clear the query or switch the status filter. The currently open instance stays active.",
                 })}
               </div>
+              {instanceDataMode === "empty" ? (
+                <button className="route-btn active" type="button" onClick={() => setNewInstanceOpen(true)}>
+                  <svg className="icon"><use href="#i-terminal" /></svg>
+                  {t(lang, { zh: "新建空白实例", en: "New blank instance" })}
+                </button>
+              ) : null}
             </article>
           ) : null}
           {groupedInstances.map((group) => (
@@ -2872,6 +2889,15 @@ export function InstancesPage() {
           onClose={() => setCaptureDrawerOpen(false)}
         />
       ) : null}
+      <NewInstanceDrawer
+        open={newInstanceOpen}
+        lang={lang}
+        onClose={() => setNewInstanceOpen(false)}
+        onCreated={(runId) => {
+          setNewInstanceOpen(false);
+          navigate(dashboardRoutes.instance(runId));
+        }}
+      />
     </section>
   );
 }

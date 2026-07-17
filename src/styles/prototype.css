@@ -1637,6 +1637,87 @@
       animation: session-capture-enter 180ms ease-out;
     }
 
+    .new-instance-drawer {
+      width: min(560px, 100vw);
+      grid-template-rows: auto minmax(0, 1fr) auto;
+    }
+
+    .new-instance-content {
+      display: grid;
+      align-content: start;
+      gap: 20px;
+      padding: 22px;
+      overflow-y: auto;
+    }
+
+    .new-instance-source-band {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .new-instance-runtime-row {
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr);
+      gap: 12px;
+      align-items: center;
+      padding: 14px;
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+    }
+
+    .new-instance-runtime-row .icon {
+      width: 22px;
+      height: 22px;
+      color: var(--accent);
+    }
+
+    .new-instance-runtime-row div {
+      min-width: 0;
+      display: grid;
+      gap: 4px;
+    }
+
+    .new-instance-runtime-row strong { font-size: 12px; }
+    .new-instance-runtime-row span { color: var(--muted); font-size: 10px; line-height: 1.5; }
+    .new-instance-advanced { border: 1px solid var(--line); background: var(--panel-2); }
+    .new-instance-advanced-trigger { width: 100%; min-height: 46px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 0; color: var(--text); background: transparent; cursor: pointer; }
+    .new-instance-advanced-trigger > span { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; }
+    .new-instance-chevron { transition: transform 160ms ease; }
+    .new-instance-advanced.open .new-instance-chevron { transform: rotate(180deg); }
+    .new-instance-advanced-body { display: grid; gap: 12px; padding: 14px; border-top: 1px solid var(--line); }
+    .new-instance-binding-group { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 10px; border: 1px solid var(--line); }
+    .new-instance-binding-group legend { padding: 0 5px; color: var(--muted); font-size: 10px; }
+    .new-instance-binding-group label { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; align-items: start; cursor: pointer; }
+    .new-instance-binding-group label > span { display: grid; gap: 2px; min-width: 0; }
+    .new-instance-binding-group strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+    .new-instance-binding-group small { color: var(--muted); font: 9px/1.45 var(--mono); overflow-wrap: anywhere; }
+    .new-instance-binding-group input { margin: 2px 0 0; accent-color: var(--accent); }
+
+    .creator-projects-panel { overflow: hidden; }
+    .session-project-list { display: grid; border-top: 1px solid var(--line); }
+    .session-project-row {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) minmax(220px, auto) 40px;
+      gap: 16px;
+      align-items: center;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--line);
+    }
+    .session-project-row:last-child { border-bottom: 0; }
+    .session-project-main { min-width: 0; display: grid; gap: 4px; }
+    .session-project-assets { min-width: 0; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+    .session-project-actions { display: flex; justify-content: flex-end; }
+    .session-project-empty {
+      min-height: 150px;
+      display: grid;
+      place-items: center;
+      align-content: center;
+      gap: 12px;
+      padding: 24px;
+      color: var(--muted);
+      border-top: 1px solid var(--line);
+    }
+    .session-project-empty > .icon { width: 28px; height: 28px; color: var(--accent); }
+
     @keyframes session-capture-enter {
       from { transform: translateX(28px); opacity: 0.72; }
       to { transform: translateX(0); opacity: 1; }
@@ -1734,6 +1815,7 @@
 
     .capture-field { display: grid; gap: 8px; color: var(--muted); font-size: 12px; }
     .capture-field input,
+    .capture-field select,
     .capture-field textarea {
       width: 100%;
       box-sizing: border-box;
@@ -1748,6 +1830,7 @@
     }
     .capture-field textarea { min-height: 112px; }
     .capture-field input:focus,
+    .capture-field select:focus,
     .capture-field textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 1px; }
     .capture-field input:disabled { opacity: 0.8; }
 
@@ -2007,6 +2090,8 @@
     .session-package-options label { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 10px; }
     .session-package-options input { margin: 0; accent-color: var(--accent); }
     .session-package-options span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .session-catalog-bundle-fields { display: grid; gap: 9px; padding: 10px; border: 1px solid var(--line-strong); background: var(--panel); }
+    .session-catalog-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(120px, .6fr); gap: 8px; }
 
     .sealed-version-band { display: grid; gap: 5px; padding: 12px; border: 1px solid color-mix(in srgb, var(--success) 40%, var(--line)); background: color-mix(in srgb, var(--success) 7%, var(--panel-2)); }
     .sealed-version-band span, .sealed-version-band small { color: var(--muted); font-size: 9px; }
@@ -2022,6 +2107,7 @@
 
     @media (max-width: 720px) {
       .session-workbench-head { display: grid; padding: 16px; }
+      .session-catalog-grid { grid-template-columns: minmax(0, 1fr); }
       .session-workbench-metrics { width: max-content; }
       .session-workbench-grid { grid-template-columns: 1fr; }
       .session-workbench-column,
@@ -2031,6 +2117,10 @@
 
     @media (max-width: 720px) {
       .session-capture-drawer { width: 100vw; }
+      .new-instance-source-band { grid-template-columns: 1fr; }
+      .session-project-row { grid-template-columns: minmax(0, 1fr) 38px; }
+      .session-project-assets { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; }
+      .session-project-actions { grid-column: 2; grid-row: 1; }
       .session-capture-header, .session-capture-footer { padding: 15px 16px; }
       .session-capture-content { padding: 16px; }
       .capture-step { height: 50px; font-size: 11px; }

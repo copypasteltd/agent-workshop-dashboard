@@ -15,6 +15,7 @@ import {
   createSearchApiClient,
   createSessionsApiClient,
   createSessionRefreshFetch,
+  createSessionProjectsApiClient,
   getRunFileDownloadUrl,
   createWorkshopCatalogApiClient,
 } from "@lingban/api-sdk";
@@ -169,6 +170,12 @@ export const dashboardSessionsApi = createSessionsApiClient({
 });
 
 export const dashboardCreatorApi = createCreatorApiClient({
+  baseUrl: dashboardApiBaseUrl,
+  fetcher: dashboardAuthFetch,
+  getAccessToken: getDashboardAccessToken,
+});
+
+export const dashboardSessionProjectsApi = createSessionProjectsApiClient({
   baseUrl: dashboardApiBaseUrl,
   fetcher: dashboardAuthFetch,
   getAccessToken: getDashboardAccessToken,

@@ -44,6 +44,8 @@ import {
 import { CreatorGovernancePanel, type GovernanceMeta } from "./CreatorGovernancePanel";
 import { CreatorReleasePanel, CreatorReplayPanel } from "./CreatorReleasePanels";
 import { SessionAssetWorkbench } from "./SessionAssetWorkbench";
+import { NewInstanceDrawer } from "../instances/NewInstanceDrawer";
+import { SessionProjectsPanel } from "./SessionProjectsPanel";
 import { useDashboardAuthStore } from "../../stores/dashboardAuthStore";
 import { useDashboardUiStore } from "../../stores/dashboardUiStore";
 
@@ -5860,6 +5862,7 @@ export function CreatorPage() {
   const lang = useDashboardUiStore((state) => state.lang);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "success" | "warn" | "active">("all");
+  const [sourceRunDrawerOpen, setSourceRunDrawerOpen] = useState(false);
   const currentWorkspaceId = useDashboardUiStore((state) => state.currentWorkspaceId);
   const authMode = useDashboardAuthStore((state) => state.authMode);
   const authenticated = useDashboardAuthStore((state) => state.authenticated);
@@ -6244,7 +6247,10 @@ export function CreatorPage() {
                 {t(lang, { zh: "当前工作区还没有 Creator 包", en: "No Creator package is available in this workspace yet" })}
               </h2>
             </div>
-            <span className="pill active">{t(lang, currentWorkspace.name)}</span>
+            <button className="route-btn active" type="button" onClick={() => setSourceRunDrawerOpen(true)}>
+              <svg className="icon"><use href="#i-terminal" /></svg>
+              {t(lang, { zh: "新建 Session", en: "New Session" })}
+            </button>
           </div>
           <div className="section-note">
             {t(lang, {
@@ -6253,6 +6259,12 @@ export function CreatorPage() {
             })}
           </div>
         </article>
+
+        <SessionProjectsPanel
+          enabled={dataQueriesEnabled}
+          lang={lang}
+          onCreate={() => setSourceRunDrawerOpen(true)}
+        />
 
         <SessionAssetWorkbench
           enabled={dataQueriesEnabled}
@@ -6318,6 +6330,15 @@ export function CreatorPage() {
             </article>
           </div>
         </div>
+        <NewInstanceDrawer
+          open={sourceRunDrawerOpen}
+          lang={lang}
+          onClose={() => setSourceRunDrawerOpen(false)}
+          onCreated={(runId) => {
+            setSourceRunDrawerOpen(false);
+            navigate(dashboardRoutes.instance(runId));
+          }}
+        />
       </section>
     );
   }
@@ -6330,7 +6351,15 @@ export function CreatorPage() {
             <div className="eyebrow">{t(lang, { zh: "Creator 工作台", en: "Creator Studio" })}</div>
             <h2 className="hero-title">{t(lang, { zh: "按 package 管理，工程细节进入独立页面", en: "Manage by package with dedicated pages for engineering detail" })}</h2>
           </div>
-          <span className="pill active">dashboard://creator</span>
+          <button
+            className="route-btn active"
+            data-testid="dashboard-creator-new-session"
+            type="button"
+            onClick={() => setSourceRunDrawerOpen(true)}
+          >
+            <svg className="icon"><use href="#i-terminal" /></svg>
+            {t(lang, { zh: "新建 Session", en: "New Session" })}
+          </button>
         </div>
         <div className="section-note">{t(lang, { zh: "Creator 工作区固定拆成 package 详情、调试回放与治理设置三类入口。运行镜像、凭证边界、发布审核与成本治理都能通过深链路由直达。", en: "The Creator workspace is fixed into package detail, debug replay, and governance entry points. Runtime images, secret boundaries, release review, and cost governance are all deep-linkable." })}</div>
         <div className="metric-grid">
@@ -6347,6 +6376,12 @@ export function CreatorPage() {
           ))}
         </div>
       </article>
+
+      <SessionProjectsPanel
+        enabled={dataQueriesEnabled}
+        lang={lang}
+        onCreate={() => setSourceRunDrawerOpen(true)}
+      />
 
       <SessionAssetWorkbench
         enabled={dataQueriesEnabled}
@@ -6639,6 +6674,15 @@ export function CreatorPage() {
           </div>
         </div>
       </details>
+      <NewInstanceDrawer
+        open={sourceRunDrawerOpen}
+        lang={lang}
+        onClose={() => setSourceRunDrawerOpen(false)}
+        onCreated={(runId) => {
+          setSourceRunDrawerOpen(false);
+          navigate(dashboardRoutes.instance(runId));
+        }}
+      />
     </section>
   );
 }

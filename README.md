@@ -23,7 +23,7 @@ Lingban Dashboard serves power users, creators, and workspace members. The platf
 | 执行实例 | 多任务筛选、完整 Codex 对话、实时状态、附件、审批和结果 |
 | 文件 | target path 文件树、路径导航、预览、下载票据和归档 |
 | 批量任务 | 导入、字段映射、校验、估算、启动、重试和取消 |
-| Creator | Package、Session Pack、Release、Gate、Activation、Replay 和 Audit Export |
+| Creator | Session Project、空白 Source Run、Capture、Draft、Replay、Seal、Package、Catalog、Release 和 Audit Export |
 | 工作区治理 | Provider 绑定、Credential、MCP、Quota、Billing 和成本摘要 |
 | 体验基础 | 中英文、明暗主题、通知、全局搜索、抽屉侧栏和响应式布局 |
 
@@ -32,7 +32,7 @@ Lingban Dashboard serves power users, creators, and workspace members. The platf
 | 路由 | 内容 |
 |---|---|
 | `/workspace/workshops` | 工坊目录、详情、服务、批量任务和启动 |
-| `/workspace/instances` | 实例列表、任务对话、文件、运行状态和审批 |
+| `/workspace/instances` | 实例列表、新建空白 Codex、任务对话、文件、运行状态和审批 |
 | `/workspace/settings/providers` | 工作区 Provider 路由和默认模型 |
 | `/workspace/creator` | Creator 资产、发布和回放治理 |
 | `/workspace/creator/governance/:section` | Policy、Audit、Cost 治理视图 |
@@ -80,7 +80,10 @@ The Dashboard and Admin Console have independent interface, route, build, sessio
 ## Session Control / Session Control
 
 - Instance pages open `SessionCaptureDrawer` for terminal or completed-turn checkpoint capture.
+- Instance and Creator pages provide `NewInstanceDrawer` for a blank recording Run with explicit Provider, MCP, and Credential references.
+- `SessionProjectsPanel` tracks Source Run, Capture, Draft, sealed version, Package, Workshop, and Service IDs.
 - Creator opens `SessionAssetWorkbench` for Capture selection, Draft revision, redaction review, Replay Gate, sealing, and Package binding.
+- Sealed Source assets can create a draft Workshop, draft Service, immutable Task Version, Package, and candidate Session Binding in one guided flow.
 - Raw Capture objects require an access reason and display the latest audited access records.
 - The workbench renders as three columns on desktop, two columns on narrow desktop, and one column at the smallest supported viewport.
 
