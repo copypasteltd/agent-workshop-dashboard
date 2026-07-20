@@ -88,3 +88,9 @@ The Dashboard and Admin Console have independent interface, route, build, sessio
 - The workbench renders as three columns on desktop, two columns on narrow desktop, and one column at the smallest supported viewport.
 
 Verification completed on `1440x1000`, `1024x768`, and `390x844` without horizontal overflow. The complete Dashboard/Admin/H5 E2E suite passes `32/32`.
+
+## 2026-07-20 Production QA / 2026-07-20 生产复验
+
+已部署页面完成工坊、实例、实例详情、Provider 设置和 Creator 路由复验。中文/英文、深色/浅色和抽屉侧栏均可切换；Rail 图标与抽屉开关提供动态可访问名称，纯视觉遮罩从可访问树隐藏。1440x900 与 1024x768 无横向溢出或可见元素越界。
+
+The deployed Dashboard passes route, locale, theme, drawer, and responsive checks. Rail actions and drawer controls expose accessible names, while the visual scrim stays outside the accessibility tree.

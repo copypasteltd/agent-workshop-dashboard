@@ -262,6 +262,7 @@ export function DashboardShell() {
     queryFn: async () =>
       dashboardCatalogApi.listWorkshops({
         workspaceContextKey: currentWorkspace.id,
+        workspaceId: currentWorkspace.runtimeWorkspaceId,
         entrySurface: "dashboard",
       }),
     enabled: dataQueriesEnabled,
@@ -279,6 +280,7 @@ export function DashboardShell() {
     queryFn: async () =>
       dashboardCatalogApi.listServices({
         workspaceContextKey: currentWorkspace.id,
+        workspaceId: currentWorkspace.runtimeWorkspaceId,
         entrySurface: "dashboard",
       }),
     enabled: dataQueriesEnabled,
@@ -860,6 +862,14 @@ export function DashboardShell() {
           <button
             className={`rail-btn drawer-toggle ${sidebarOpen ? "active" : ""}`}
             type="button"
+            aria-label={t(lang, {
+              zh: sidebarOpen ? "收起侧栏" : "展开侧栏",
+              en: sidebarOpen ? "Collapse sidebar" : "Expand sidebar",
+            })}
+            title={t(lang, {
+              zh: sidebarOpen ? "收起侧栏" : "展开侧栏",
+              en: sidebarOpen ? "Collapse sidebar" : "Expand sidebar",
+            })}
             onClick={toggleSidebar}
           >
             <svg className="icon">
@@ -870,6 +880,8 @@ export function DashboardShell() {
             <button
               className={`rail-btn ${view === "workshops" ? "active" : ""}`}
               type="button"
+              aria-label={t(lang, { zh: "工坊", en: "Workshops" })}
+              title={t(lang, { zh: "工坊", en: "Workshops" })}
               onClick={() => navigate(dashboardRoutes.workshops)}
             >
               <svg className="icon">
@@ -879,6 +891,8 @@ export function DashboardShell() {
             <button
               className={`rail-btn ${view === "instances" ? "active" : ""}`}
               type="button"
+              aria-label={t(lang, { zh: "实例", en: "Instances" })}
+              title={t(lang, { zh: "实例", en: "Instances" })}
               onClick={() => navigate(dashboardRoutes.instances)}
             >
               <svg className="icon">
@@ -888,6 +902,8 @@ export function DashboardShell() {
             <button
               className={`rail-btn ${view === "settings" ? "active" : ""}`}
               type="button"
+              aria-label={t(lang, { zh: "设置", en: "Settings" })}
+              title={t(lang, { zh: "设置", en: "Settings" })}
               onClick={() => navigate(workspaceRoutes.settingsProviders)}
             >
               <svg className="icon">
@@ -897,6 +913,8 @@ export function DashboardShell() {
             <button
               className={`rail-btn ${view === "creator" ? "active" : ""}`}
               type="button"
+              aria-label="Creator"
+              title="Creator"
               onClick={() => navigate(dashboardRoutes.creator)}
             >
               <svg className="icon">
@@ -911,6 +929,8 @@ export function DashboardShell() {
             <button
               className={`sidebar-close ${sidebarOpen ? "active" : ""}`}
               type="button"
+              aria-label={t(lang, { zh: "收起侧栏", en: "Collapse sidebar" })}
+              title={t(lang, { zh: "收起侧栏", en: "Collapse sidebar" })}
               onClick={toggleSidebar}
             >
               <svg className="icon">
@@ -1079,7 +1099,8 @@ export function DashboardShell() {
         <button
           className="sidebar-scrim"
           type="button"
-          aria-label="Close sidebar"
+          aria-hidden="true"
+          tabIndex={-1}
           onClick={() => setSidebarOpen(false)}
         />
 
@@ -1089,6 +1110,14 @@ export function DashboardShell() {
               <button
                 className={`drawer-inline-toggle ${sidebarOpen ? "active" : ""}`}
                 type="button"
+                aria-label={t(lang, {
+                  zh: sidebarOpen ? "收起侧栏" : "展开侧栏",
+                  en: sidebarOpen ? "Collapse sidebar" : "Expand sidebar",
+                })}
+                title={t(lang, {
+                  zh: sidebarOpen ? "收起侧栏" : "展开侧栏",
+                  en: sidebarOpen ? "Collapse sidebar" : "Expand sidebar",
+                })}
                 onClick={toggleSidebar}
               >
                 <svg className="icon">

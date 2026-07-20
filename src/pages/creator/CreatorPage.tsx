@@ -5950,6 +5950,7 @@ export function CreatorPage() {
     queryFn: async () =>
       dashboardCatalogApi.listWorkshops({
         workspaceContextKey: currentWorkspace.id,
+        workspaceId: currentWorkspace.runtimeWorkspaceId,
       }),
     enabled: dataQueriesEnabled,
     retry: false,
@@ -5960,6 +5961,7 @@ export function CreatorPage() {
     queryFn: async () =>
       dashboardCatalogApi.listServices({
         workspaceContextKey: currentWorkspace.id,
+        workspaceId: currentWorkspace.runtimeWorkspaceId,
       }),
     enabled: dataQueriesEnabled,
     retry: false,

@@ -8,6 +8,10 @@ import {
 } from "../../lib/api";
 import { t } from "../../lib/i18n";
 
+function createOperationId() {
+  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 export function NewInstanceDrawer({
   open,
   lang,
@@ -28,6 +32,9 @@ export function NewInstanceDrawer({
   const [selectedMcpIds, setSelectedMcpIds] = useState<string[]>([]);
   const [selectedCredentialIds, setSelectedCredentialIds] = useState<string[]>([]);
   const [defaultsApplied, setDefaultsApplied] = useState(false);
+  const [autoApproval, setAutoApproval] = useState(false);
+  const [sessionProjectId, setSessionProjectId] = useState<string | null>(null);
+  const [operationId, setOperationId] = useState(() => createOperationId());
 
   const providersQuery = useQuery({
     enabled: open,
@@ -65,6 +72,9 @@ export function NewInstanceDrawer({
     setSelectedMcpIds([]);
     setSelectedCredentialIds([]);
     setDefaultsApplied(false);
+    setAutoApproval(false);
+    setSessionProjectId(null);
+    setOperationId(createOperationId());
   }, [open]);
 
   useEffect(() => {
@@ -106,27 +116,36 @@ export function NewInstanceDrawer({
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      const project = await dashboardSessionProjectsApi.create({
-        name: name.trim(),
-        description: description.trim(),
-      });
+      let projectId = sessionProjectId;
+      if (!projectId) {
+        const project = await dashboardSessionProjectsApi.create({
+          name: name.trim(),
+          description: description.trim(),
+        }, { idempotencyKey: `dashboard:${operationId}:project` });
+        projectId = project.sessionProjectId;
+        setSessionProjectId(projectId);
+      }
+      const selectedEntries = (mcpsQuery.data ?? []).filter((entry) =>
+        selectedMcpIds.includes(entry.mcpId)
+      );
       return dashboardSessionProjectsApi.createSourceRun({
-        sessionProjectId: project.sessionProjectId,
+        sessionProjectId: projectId,
         title: name.trim(),
         entrySurface: "dashboard",
+        approvalMode: autoApproval ? "auto_all" : "manual",
         providerSelection: providerId
           ? { providerId, ...(model.trim() ? { model: model.trim() } : {}) }
           : null,
         bindings: {
-          firstPartyMcpIds: selectedMcpIds.filter(
-            (mcpId) => mcpsQuery.data?.find((entry) => entry.mcpId === mcpId)?.source === "first-party"
-          ),
-          externalConnectorRefs: selectedMcpIds.filter(
-            (mcpId) => mcpsQuery.data?.find((entry) => entry.mcpId === mcpId)?.source !== "first-party"
-          ),
+          firstPartyMcpIds: selectedEntries
+            .filter((entry) => entry.source === "first-party")
+            .map((entry) => entry.mcpId),
+          externalConnectorRefs: selectedEntries
+            .filter((entry) => entry.source !== "first-party")
+            .map((entry) => entry.ref),
           credentialIds: selectedCredentialIds,
         },
-      });
+      }, { idempotencyKey: `dashboard:${operationId}:source-run` });
     },
     onSuccess: async (result) => {
       await Promise.all([
@@ -235,6 +254,17 @@ export function NewInstanceDrawer({
               <svg className="icon new-instance-chevron"><use href="#i-chevron-down" /></svg>
             </button>
             {advancedOpen ? <div className="new-instance-advanced-body">
+              <label className="new-instance-approval-option">
+                <input
+                  type="checkbox"
+                  checked={autoApproval}
+                  onChange={(event) => setAutoApproval(event.target.checked)}
+                />
+                <span>
+                  <strong>{t(lang, { zh: "全自动审批", en: "Automatic approval" })}</strong>
+                  <small>{t(lang, { zh: "实例中的审批请求自动通过", en: "Automatically approve requests in this instance" })}</small>
+                </span>
+              </label>
               <label className="capture-field">
                 <span>Provider</span>
                 <select value={providerId} onChange={(event) => { setProviderId(event.target.value); setModel(""); }}>
@@ -282,6 +312,12 @@ export function NewInstanceDrawer({
               {createMutation.error instanceof Error
                 ? createMutation.error.message
                 : t(lang, { zh: "实例创建失败。", en: "Instance creation failed." })}
+            </div>
+          ) : null}
+          {sessionProjectId ? (
+            <div className="capture-alert">
+              {t(lang, { zh: "Session Project 已创建，重试将继续启动同一个 Source Run。", en: "The Session Project exists; retrying will resume the same Source Run." })}
+              <span className="mono">{sessionProjectId}</span>
             </div>
           ) : null}
           {capabilityConfigError ? (

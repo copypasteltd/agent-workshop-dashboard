@@ -1699,6 +1699,11 @@
     .new-instance-chevron { transition: transform 160ms ease; }
     .new-instance-advanced.open .new-instance-chevron { transform: rotate(180deg); }
     .new-instance-advanced-body { display: grid; gap: 12px; padding: 14px; border-top: 1px solid var(--line); }
+    .new-instance-approval-option { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; align-items: start; padding: 10px; border: 1px solid var(--line); background: var(--surface-2); cursor: pointer; }
+    .new-instance-approval-option > span { display: grid; gap: 3px; min-width: 0; }
+    .new-instance-approval-option strong { font-size: 11px; }
+    .new-instance-approval-option small { color: var(--muted); font-size: 9px; line-height: 1.5; }
+    .new-instance-approval-option input { margin: 2px 0 0; accent-color: var(--accent); }
     .new-instance-binding-group { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 10px; border: 1px solid var(--line); }
     .new-instance-binding-group legend { padding: 0 5px; color: var(--muted); font-size: 10px; }
     .new-instance-binding-group label { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; align-items: start; cursor: pointer; }

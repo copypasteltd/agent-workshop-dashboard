@@ -353,6 +353,7 @@ export function WorkshopsPage() {
     queryFn: async () =>
       dashboardCatalogApi.listWorkshops({
         workspaceContextKey: currentWorkspace.id,
+        workspaceId: currentWorkspace.runtimeWorkspaceId,
         entrySurface: "dashboard",
       }),
     enabled: workspaceDataReady,
@@ -370,6 +371,7 @@ export function WorkshopsPage() {
     queryFn: async () =>
       dashboardCatalogApi.listServices({
         workspaceContextKey: currentWorkspace.id,
+        workspaceId: currentWorkspace.runtimeWorkspaceId,
         entrySurface: "dashboard",
       }),
     enabled: workspaceDataReady,
