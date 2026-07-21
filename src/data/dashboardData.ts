@@ -76,6 +76,21 @@ export type InstanceRecord = {
     exitCode: number | null;
     exitSignal: string | null;
   };
+  lifecycle: {
+    runtimeStatus: "NOT_STARTED" | "ACTIVE" | "STOP_REQUESTED" | "STOPPING" | "RELEASED" | "RELEASE_FAILED" | "ORPHANED";
+    recordStatus: "ACTIVE" | "ARCHIVED" | "DELETION_PENDING" | "DELETED";
+    stopMode: "graceful" | "force" | null;
+    stopReason: string | null;
+    stopRequestedAt: string | null;
+    releasedAt: string | null;
+    billingStoppedAt: string | null;
+    releaseFailure: string | null;
+    deletionFailure: string | null;
+    cleanupAttemptCount: number;
+    archivedAt: string | null;
+    deletionRequestedAt: string | null;
+    deletedAt: string | null;
+  };
   audit: {
     timeline: Array<{ time: string; text: LocalizedString }>;
     boundaries: LocalizedString[];

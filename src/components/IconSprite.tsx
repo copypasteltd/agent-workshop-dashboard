@@ -19,6 +19,7 @@ export function IconSprite() {
       <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="M6 9L12 15L18 9" /></symbol>
       <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6L18 18" /><path d="M18 6L6 18" /></symbol>
       <symbol id="i-archive" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="4" rx="1" /><path d="M5 8V19C5 20.1 5.9 21 7 21H17C18.1 21 19 20.1 19 19V8" /><path d="M10 12H14" /></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7H20" /><path d="M9 3H15L16 7H8L9 3Z" /><path d="M6 7L7 21H17L18 7" /><path d="M10 11V17" /><path d="M14 11V17" /></symbol>
       <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3V15" /><path d="M7 10L12 15L17 10" /><path d="M5 20H19" /></symbol>
       <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5L9.5 17L19 7.5" /></symbol>
       <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11A8 8 0 0 0 6.2 6L4 8" /><path d="M4 4V8H8" /><path d="M4 13A8 8 0 0 0 17.8 18L20 16" /><path d="M20 20V16H16" /></symbol>

@@ -58,7 +58,7 @@ function toListAttentionModeFilter(listMode: InstanceListMode) {
   }
 }
 
-function toListViewStatusFilter(statusFilter: "all" | "active" | "warn" | "success") {
+function toListViewStatusFilter(statusFilter: "all" | "active" | "warn" | "success" | "failed" | "cancelled") {
   switch (statusFilter) {
     case "active":
       return "running" as const;
@@ -66,6 +66,10 @@ function toListViewStatusFilter(statusFilter: "all" | "active" | "warn" | "succe
       return "approval" as const;
     case "success":
       return "done" as const;
+    case "failed":
+      return "failed" as const;
+    case "cancelled":
+      return "cancelled" as const;
     case "all":
     default:
       return undefined;
@@ -920,6 +924,16 @@ function InstanceTabPanel({ instance, liveMode }: { instance: InstanceRecord; li
   if (instanceTab === "runtime") {
     const runtimeRows = [
       {
+        key: "runtime-lifecycle",
+        label: t(lang, { zh: "Runtime 生命周期", en: "Runtime lifecycle" }),
+        value: instance.lifecycle.runtimeStatus,
+      },
+      {
+        key: "record-lifecycle",
+        label: t(lang, { zh: "记录状态", en: "Record lifecycle" }),
+        value: instance.lifecycle.recordStatus,
+      },
+      {
         key: "launch-mode",
         label: t(lang, { zh: "启动模式", en: "Launch mode" }),
         value: formatRuntimeLaunchMode(lang, instance.runtime.launchMode),
@@ -960,6 +974,26 @@ function InstanceTabPanel({ instance, liveMode }: { instance: InstanceRecord; li
         value: formatRuntimeTimestamp(lang, instance.runtime.finishedAt),
       },
       {
+        key: "stop-requested-at",
+        label: t(lang, { zh: "停止请求时间", en: "Stop requested at" }),
+        value: formatRuntimeTimestamp(lang, instance.lifecycle.stopRequestedAt),
+      },
+      {
+        key: "released-at",
+        label: t(lang, { zh: "资源释放时间", en: "Released at" }),
+        value: formatRuntimeTimestamp(lang, instance.lifecycle.releasedAt),
+      },
+      {
+        key: "billing-stopped-at",
+        label: t(lang, { zh: "计费截止时间", en: "Billing stopped at" }),
+        value: formatRuntimeTimestamp(lang, instance.lifecycle.billingStoppedAt),
+      },
+      {
+        key: "cleanup-attempts",
+        label: t(lang, { zh: "释放尝试次数", en: "Release attempts" }),
+        value: String(instance.lifecycle.cleanupAttemptCount),
+      },
+      {
         key: "exit-code",
         label: t(lang, { zh: "退出码", en: "Exit code" }),
         value:
@@ -973,7 +1007,7 @@ function InstanceTabPanel({ instance, liveMode }: { instance: InstanceRecord; li
         value: instance.runtime.exitSignal ?? t(lang, { zh: "未上报", en: "Not reported" }),
       },
     ];
-    const runtimeReady = hasRuntimeTelemetry(instance.runtime);
+    const runtimeReady = hasRuntimeTelemetry(instance.runtime) || instance.lifecycle.runtimeStatus !== "NOT_STARTED";
 
     return (
       <div className="detail-body">
@@ -1006,6 +1040,18 @@ function InstanceTabPanel({ instance, liveMode }: { instance: InstanceRecord; li
               </div>
             ))
           : null}
+        {instance.lifecycle.releaseFailure ? (
+          <div className="composer-error">
+            {t(lang, { zh: "最近一次释放错误：", en: "Latest release error: " })}
+            {instance.lifecycle.releaseFailure}
+          </div>
+        ) : null}
+        {instance.lifecycle.deletionFailure ? (
+          <div className="composer-error">
+            {t(lang, { zh: "最近一次销毁错误：", en: "Latest deletion error: " })}
+            {instance.lifecycle.deletionFailure}
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -1313,7 +1359,8 @@ export function InstancesPage() {
   const clearInstanceDraft = useDashboardUiStore((state) => state.clearInstanceDraft);
   const [searchQuery, setSearchQuery] = useState("");
   const [listMode, setListMode] = useState<InstanceListMode>("all");
-  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "warn" | "success">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "warn" | "success" | "failed" | "cancelled">("all");
+  const [recordFilter, setRecordFilter] = useState<"ACTIVE" | "ARCHIVED">("ACTIVE");
   const [tagFilter, setTagFilter] = useState("all");
   const [newInstanceOpen, setNewInstanceOpen] = useState(false);
   const currentWorkspace = useMemo(
@@ -1349,6 +1396,7 @@ export function InstancesPage() {
       currentWorkspace.id,
       listMode,
       statusFilter,
+      recordFilter,
       tagFilter,
       searchQuery,
     ],
@@ -1359,6 +1407,7 @@ export function InstancesPage() {
           attentionMode: toListAttentionModeFilter(listMode),
           viewStatus: toListViewStatusFilter(statusFilter),
           tag: tagFilter === "all" ? undefined : tagFilter,
+          recordStatus: recordFilter,
         });
       } catch {
         return [];
@@ -1460,7 +1509,7 @@ export function InstancesPage() {
   }, [currentWorkspace, liveRunDetailQuery.data, liveRunFilesQuery.data]);
 
   const instanceDataMode =
-    (runsSummaryQuery.data?.total ?? 0) > 0 || Object.keys(liveInstances).length > 0 || Boolean(detailedLiveInstance)
+    (runsSummaryQuery.data?.total ?? 0) > 0 || Object.keys(liveInstances).length > 0 || filteredLiveInstances.length > 0 || Boolean(detailedLiveInstance)
       ? "live"
       : "empty";
 
@@ -1474,8 +1523,12 @@ export function InstancesPage() {
       next[detailedLiveInstance.id] = detailedLiveInstance;
     }
 
+    for (const filteredInstance of filteredLiveInstances) {
+      next[filteredInstance.id] = filteredInstance;
+    }
+
     return next;
-  }, [detailedLiveInstance, instanceDataMode, liveInstances]);
+  }, [detailedLiveInstance, filteredLiveInstances, instanceDataMode, liveInstances]);
 
   const sortedInstances = useMemo(() => {
     const all = Object.values(mergedInstances);
@@ -1610,6 +1663,8 @@ export function InstancesPage() {
   const [composerError, setComposerError] = useState("");
   const [reviewError, setReviewError] = useState("");
   const [captureDrawerOpen, setCaptureDrawerOpen] = useState(false);
+  const [lifecycleAction, setLifecycleAction] = useState<"stop" | "archive" | "restore" | "delete" | "release" | null>(null);
+  const [lifecycleError, setLifecycleError] = useState("");
   const [reviewFormsByAnswerId, setReviewFormsByAnswerId] = useState<
     Record<string, ReviewFormState>
   >({});
@@ -1619,6 +1674,13 @@ export function InstancesPage() {
     liveMode && liveRunDetailQuery.data?.run.runId === instance?.id
       ? liveRunDetailQuery.data
       : null;
+  const runTerminal = Boolean(
+    liveSnapshot && ["SUCCEEDED", "FAILED", "CANCELLED"].includes(liveSnapshot.run.status)
+  );
+  const runtimeTransitioning = Boolean(
+    liveSnapshot && ["STOP_REQUESTED", "STOPPING"].includes(liveSnapshot.lifecycle.runtimeStatus)
+  );
+  const runInteractive = Boolean(liveSnapshot && !runTerminal && !runtimeTransitioning);
   const informationCollection = liveSnapshot?.informationCollection ?? null;
   const informationCollectionVisible = useMemo(
     () => hasInformationCollectionData(informationCollection),
@@ -1727,6 +1789,8 @@ export function InstancesPage() {
     setReviewError("");
     setReviewFormsByAnswerId({});
     setCaptureDrawerOpen(false);
+    setLifecycleAction(null);
+    setLifecycleError("");
   }, [instance?.id]);
 
   const approvalMutation = useMutation({
@@ -1991,6 +2055,47 @@ export function InstancesPage() {
     },
   });
 
+  const lifecycleMutation = useMutation({
+    mutationFn: async (input: { action: "stop" | "archive" | "restore" | "delete" | "release"; runId: string }) => {
+      switch (input.action) {
+        case "stop":
+        case "release":
+          return { action: input.action, snapshot: await dashboardRunsApi.stopRun(input.runId, t(lang, { zh: "用户从 Dashboard 请求停止并释放实例", en: "User requested run stop and release from Dashboard" })) };
+        case "archive":
+          return { action: input.action, snapshot: await dashboardRunsApi.archiveRun(input.runId, t(lang, { zh: "用户从 Dashboard 归档实例", en: "User archived the run from Dashboard" })) };
+        case "restore":
+          return { action: input.action, snapshot: await dashboardRunsApi.restoreRun(input.runId) };
+        case "delete":
+          await dashboardRunsApi.deleteRun(input.runId, t(lang, { zh: "用户确认从 Dashboard 永久删除实例", en: "User confirmed permanent run deletion from Dashboard" }));
+          return { action: input.action, snapshot: null };
+      }
+    },
+    onSuccess: async (result, variables) => {
+      setLifecycleError("");
+      setLifecycleAction(null);
+      if (result.snapshot) {
+        queryClient.setQueryData(["dashboard", "runs", variables.runId], result.snapshot);
+        queryClient.setQueryData(["dashboard", "runs", variables.runId, "files"], result.snapshot.files);
+      }
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "billing"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "me", "recent"] }),
+      ]);
+      if (result.action === "delete") {
+        clearInstanceDraft(variables.runId);
+        navigate(dashboardRoutes.instances, { replace: true });
+      }
+    },
+    onError: (error) => {
+      setLifecycleError(
+        error instanceof Error
+          ? error.message
+          : t(lang, { zh: "实例生命周期操作失败。", en: "Run lifecycle operation failed." })
+      );
+    },
+  });
+
   return (
     <section className="view" data-testid="dashboard-instances-page">
       <article className="filter-card">
@@ -2047,10 +2152,31 @@ export function InstancesPage() {
         </div>
         <div className="pill-row">
           {[
+            { key: "ACTIVE" as const, label: { zh: "当前实例", en: "Current" } },
+            { key: "ARCHIVED" as const, label: { zh: "已归档", en: "Archived" } },
+          ].map((chip) => (
+            <button
+              className={`path-chip ${recordFilter === chip.key ? "active" : ""}`}
+              key={chip.key}
+              type="button"
+              onClick={() => {
+                setRecordFilter(chip.key);
+                setListMode("all");
+                setStatusFilter("all");
+              }}
+            >
+              {t(lang, chip.label)}
+            </button>
+          ))}
+        </div>
+        <div className="pill-row">
+          {[
             { key: "all" as const, label: { zh: "全部", en: "All" }, tone: "" },
             { key: "active" as const, label: { zh: "运行中", en: "Running" }, tone: "" },
             { key: "warn" as const, label: { zh: "待审批", en: "Approval" }, tone: "warn" },
             { key: "success" as const, label: { zh: "回流完成", en: "Callback" }, tone: "success" },
+            { key: "failed" as const, label: { zh: "失败", en: "Failed" }, tone: "danger" },
+            { key: "cancelled" as const, label: { zh: "已取消", en: "Cancelled" }, tone: "warn" },
           ].map((chip) => (
             <button
               className={`path-chip ${statusFilter === chip.key ? "active" : chip.tone}`}
@@ -2200,7 +2326,7 @@ export function InstancesPage() {
                     <div className="meta">{t(lang, instance.summary)}</div>
                   </div>
                   <div className="pill-row">
-                    {liveSnapshot ? (
+                    {runInteractive ? (
                       <button
                         className="route-btn active session-capture-trigger"
                         type="button"
@@ -2213,6 +2339,48 @@ export function InstancesPage() {
                         <svg className="icon"><use href="#i-archive" /></svg>
                         {t(lang, { zh: "固化会话", en: "Capture session" })}
                       </button>
+                    ) : null}
+                    {runInteractive ? (
+                      <button
+                        className="route-btn danger"
+                        type="button"
+                        data-testid="dashboard-instance-stop"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          setLifecycleAction("stop");
+                        }}
+                      >
+                        <svg className="icon"><use href="#i-x" /></svg>
+                        {t(lang, { zh: "停止实例", en: "Stop run" })}
+                      </button>
+                    ) : null}
+                    {liveSnapshot && ["RELEASE_FAILED", "ORPHANED"].includes(liveSnapshot.lifecycle.runtimeStatus) ? (
+                      <button className="route-btn danger" type="button" onClick={(event) => { event.preventDefault(); setLifecycleAction("release"); }}>
+                        <svg className="icon"><use href="#i-refresh" /></svg>
+                        {t(lang, { zh: "重试释放", en: "Retry release" })}
+                      </button>
+                    ) : null}
+                    {liveSnapshot?.lifecycle.recordStatus === "ARCHIVED" ? (
+                      <button className="route-btn" type="button" onClick={(event) => { event.preventDefault(); setLifecycleAction("restore"); }}>
+                        <svg className="icon"><use href="#i-refresh" /></svg>
+                        {t(lang, { zh: "恢复归档", en: "Restore" })}
+                      </button>
+                    ) : liveSnapshot?.lifecycle.runtimeStatus === "RELEASED" && runTerminal ? (
+                      <button className="route-btn" type="button" onClick={(event) => { event.preventDefault(); setLifecycleAction("archive"); }}>
+                        <svg className="icon"><use href="#i-archive" /></svg>
+                        {t(lang, { zh: "归档", en: "Archive" })}
+                      </button>
+                    ) : null}
+                    {liveSnapshot?.lifecycle.runtimeStatus === "RELEASED" && runTerminal ? (
+                      <button className="route-btn danger" type="button" onClick={(event) => { event.preventDefault(); setLifecycleAction("delete"); }}>
+                        <svg className="icon"><use href="#i-trash" /></svg>
+                        {t(lang, { zh: "删除", en: "Delete" })}
+                      </button>
+                    ) : null}
+                    {liveSnapshot ? (
+                      <span className={`pill ${liveSnapshot.lifecycle.runtimeStatus === "RELEASED" ? "success" : ["RELEASE_FAILED", "ORPHANED"].includes(liveSnapshot.lifecycle.runtimeStatus) ? "danger" : runtimeTransitioning ? "warn" : "active"}`}>
+                        {liveSnapshot.lifecycle.runtimeStatus}
+                      </span>
                     ) : null}
                     <span className={`pill ${instance.statusClass}`}>{t(lang, instance.status)}</span>
                     <span className="pill active">{t(lang, instance.workspace)}</span>
@@ -2699,14 +2867,18 @@ export function InstancesPage() {
           <div className="composer">
             <div className="section-head">
               <div>
-                <div className="eyebrow">{t(lang, { zh: "继续对话", en: "Continue Conversation" })}</div>
+                <div className="eyebrow">{runInteractive ? t(lang, { zh: "继续对话", en: "Continue Conversation" }) : t(lang, { zh: "生命周期", en: "Lifecycle" })}</div>
                 <div className="detail-title">
-                  {t(lang, { zh: "运行期间保持完整对话模式", en: "The run remains a full conversation" })}
+                  {runInteractive
+                    ? t(lang, { zh: "运行期间保持完整对话模式", en: "The run remains a full conversation" })
+                    : t(lang, { zh: "实例终态与资源释放", en: "Terminal state and resource release" })}
                 </div>
               </div>
-              <span className="pill active">{t(lang, { zh: "中央主视图", en: "Primary focus" })}</span>
+              <span className={`pill ${runInteractive ? "active" : liveSnapshot?.lifecycle.runtimeStatus === "RELEASED" ? "success" : "warn"}`}>
+                {runInteractive ? t(lang, { zh: "中央主视图", en: "Primary focus" }) : liveSnapshot?.lifecycle.runtimeStatus ?? "--"}
+              </span>
             </div>
-            {instance ? liveMode ? (
+            {instance ? liveMode ? runInteractive ? (
               <>
                 <textarea
                   className="composer-box composer-input"
@@ -2850,6 +3022,38 @@ export function InstancesPage() {
                 </div>
               </>
             ) : (
+              <div className="lifecycle-composer-state" data-testid="dashboard-instance-terminal-actions">
+                <div>
+                  <div className="detail-title">
+                    {liveSnapshot?.lifecycle.deletionFailure
+                      ? t(lang, { zh: "实例销毁未完成", en: "Run deletion incomplete" })
+                      : runtimeTransitioning
+                      ? t(lang, { zh: "正在停止并释放运行环境", en: "Stopping and releasing runtime" })
+                      : liveSnapshot && ["RELEASE_FAILED", "ORPHANED"].includes(liveSnapshot.lifecycle.runtimeStatus)
+                        ? t(lang, { zh: "运行环境释放失败", en: "Runtime release failed" })
+                        : t(lang, { zh: "实例已结束", en: "Run finished" })}
+                  </div>
+                  <div className="meta">
+                    {liveSnapshot?.lifecycle.deletionFailure ?? liveSnapshot?.lifecycle.releaseFailure ?? t(lang, {
+                      zh: "当前实例已锁定对话操作，可继续查看文件、运行记录和审计信息。",
+                      en: "Conversation actions are locked. Files, runtime records, and audit data remain available.",
+                    })}
+                  </div>
+                </div>
+                <div className="pill-row">
+                  <button className="route-btn" type="button" onClick={() => setInstanceTab("files")}>
+                    <svg className="icon"><use href="#i-folder" /></svg>
+                    {t(lang, { zh: "查看文件", en: "View files" })}
+                  </button>
+                  {liveSnapshot && ["RELEASE_FAILED", "ORPHANED"].includes(liveSnapshot.lifecycle.runtimeStatus) ? (
+                    <button className="route-btn danger" type="button" onClick={() => setLifecycleAction("release")}>
+                      <svg className="icon"><use href="#i-refresh" /></svg>
+                      {t(lang, { zh: "重试释放", en: "Retry release" })}
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            ) : (
               <>
                 <div className="composer-box">
                   {t(lang, {
@@ -2927,6 +3131,57 @@ export function InstancesPage() {
           </article>
         </div>
       </div>
+      {lifecycleAction && instance ? (
+        <div className="instance-lifecycle-layer" role="presentation">
+          <button className="instance-lifecycle-backdrop" type="button" aria-label={t(lang, { zh: "关闭确认窗口", en: "Close confirmation" })} onClick={() => { if (!lifecycleMutation.isPending) { setLifecycleAction(null); setLifecycleError(""); } }} />
+          <section className="instance-lifecycle-dialog" role="dialog" aria-modal="true" aria-labelledby="instance-lifecycle-title">
+            <header>
+              <div>
+                <div className="eyebrow">RUN LIFECYCLE</div>
+                <h2 id="instance-lifecycle-title">
+                  {lifecycleAction === "stop"
+                    ? t(lang, { zh: "停止并释放实例", en: "Stop and release run" })
+                    : lifecycleAction === "release"
+                      ? t(lang, { zh: "重试释放运行环境", en: "Retry runtime release" })
+                      : lifecycleAction === "archive"
+                        ? t(lang, { zh: "归档实例", en: "Archive run" })
+                        : lifecycleAction === "restore"
+                          ? t(lang, { zh: "恢复归档实例", en: "Restore archived run" })
+                          : t(lang, { zh: "永久删除实例", en: "Permanently delete run" })}
+                </h2>
+              </div>
+              <span className="pill">{instance.id}</span>
+            </header>
+            <div className="instance-lifecycle-copy">
+              {lifecycleAction === "stop"
+                ? t(lang, { zh: "当前执行将被中断。已写入目标目录的文件继续保留，运行环境释放后不再占用计算资源。", en: "The current execution will stop. Files already written to the target remain available after compute resources are released." })
+                : lifecycleAction === "delete"
+                  ? t(lang, { zh: "消息、工作目录、文件索引和运行记录将被清理。该操作无法撤销。", en: "Messages, workspace data, file indexes, and run records will be cleared. This action cannot be undone." })
+                  : lifecycleAction === "archive"
+                    ? t(lang, { zh: "实例会从当前列表移入归档，消息和结果继续保留。", en: "The run moves to the archive while messages and results remain available." })
+                    : lifecycleAction === "restore"
+                      ? t(lang, { zh: "实例会恢复到当前任务列表，运行环境保持已释放状态。", en: "The run returns to the current list while its runtime remains released." })
+                      : t(lang, { zh: "系统将重新调用 Worker 核验并回收残留运行资源。", en: "The system will ask the Worker to verify and release residual runtime resources." })}
+            </div>
+            {lifecycleError ? <div className="composer-error">{lifecycleError}</div> : null}
+            <footer>
+              <button className="route-btn" type="button" disabled={lifecycleMutation.isPending} onClick={() => { setLifecycleAction(null); setLifecycleError(""); }}>
+                {t(lang, { zh: "取消", en: "Cancel" })}
+              </button>
+              <button
+                className={`route-btn ${lifecycleAction === "stop" || lifecycleAction === "delete" || lifecycleAction === "release" ? "danger" : "active"}`}
+                type="button"
+                disabled={lifecycleMutation.isPending}
+                onClick={() => lifecycleMutation.mutate({ action: lifecycleAction, runId: instance.id })}
+              >
+                {lifecycleMutation.isPending
+                  ? t(lang, { zh: "处理中", en: "Processing" })
+                  : t(lang, { zh: "确认执行", en: "Confirm" })}
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
       {liveSnapshot ? (
         <SessionCaptureDrawer
           open={captureDrawerOpen}

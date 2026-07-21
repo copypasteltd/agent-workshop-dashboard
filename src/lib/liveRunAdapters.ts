@@ -209,6 +209,21 @@ export function mapRunSnapshotToInstanceRecord(
       exitCode: snapshot.runtime.exitCode,
       exitSignal: snapshot.runtime.exitSignal,
     },
+    lifecycle: {
+      runtimeStatus: snapshot.lifecycle.runtimeStatus,
+      recordStatus: snapshot.lifecycle.recordStatus,
+      stopMode: snapshot.lifecycle.stopMode,
+      stopReason: snapshot.lifecycle.stopReason,
+      stopRequestedAt: snapshot.lifecycle.stopRequestedAt,
+      releasedAt: snapshot.lifecycle.releasedAt,
+      billingStoppedAt: snapshot.lifecycle.billingStoppedAt,
+      releaseFailure: snapshot.lifecycle.releaseFailure,
+      deletionFailure: snapshot.lifecycle.deletionFailure,
+      cleanupAttemptCount: snapshot.lifecycle.cleanupAttemptCount,
+      archivedAt: snapshot.lifecycle.archivedAt,
+      deletionRequestedAt: snapshot.lifecycle.deletionRequestedAt,
+      deletedAt: snapshot.lifecycle.deletedAt,
+    },
     audit: {
       timeline: snapshot.messages.slice(-4).map((message) => ({
         time: formatClock(message.createdAt),

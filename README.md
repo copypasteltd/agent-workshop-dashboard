@@ -41,6 +41,17 @@ Lingban Dashboard serves power users, creators, and workspace members. The platf
 
 Dashboard contains no Admin Shell, Admin pages, Admin session state, or internal Admin routes.
 
+## 实例生命周期 / Run Lifecycle
+
+- 实例列表支持当前、失败、取消和归档视图。
+- 运行中的实例可执行“停止并释放”；停止阶段锁定消息、附件和审批。
+- 已结束且已释放的实例可归档、恢复归档或永久删除。
+- `RELEASE_FAILED / ORPHANED` 提供重新释放入口并展示失败原因与清理次数。
+- 永久删除使用独立确认窗口；失败后保留实例可见性和错误诊断。
+- Runtime 页展示停止时间、释放时间、计费停止时间、记录状态和清理尝试次数。
+
+The instance workspace exposes stop, release retry, archive, restore, and permanent deletion with explicit confirmations and lifecycle diagnostics. Terminal runs remain readable while conversation mutations stay locked.
+
 ## 环境变量 / Environment
 
 ```env
@@ -87,7 +98,7 @@ The Dashboard and Admin Console have independent interface, route, build, sessio
 - Raw Capture objects require an access reason and display the latest audited access records.
 - The workbench renders as three columns on desktop, two columns on narrow desktop, and one column at the smallest supported viewport.
 
-Verification completed on `1440x1000`, `1024x768`, and `390x844` without horizontal overflow. The complete Dashboard/Admin/H5 E2E suite passes `32/32`.
+Verification completed on `1440x1000`, `1024x768`, and `390x844` without horizontal overflow. The complete Dashboard/Admin/H5 E2E suite passes `33/33`.
 
 ## 2026-07-20 Production QA / 2026-07-20 生产复验
 
