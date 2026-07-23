@@ -8,6 +8,7 @@
     "typecheck": "tsc -b",
     "build": "tsc -b && vite build",
     "lint": "oxlint src",
+    "test:message-media": "node --experimental-strip-types --test tests/agent-message-media.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

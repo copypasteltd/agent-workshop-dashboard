@@ -105,3 +105,18 @@ Verification completed on `1440x1000`, `1024x768`, and `390x844` without horizon
 已部署页面完成工坊、实例、实例详情、Provider 设置和 Creator 路由复验。中文/英文、深色/浅色和抽屉侧栏均可切换；Rail 图标与抽屉开关提供动态可访问名称，纯视觉遮罩从可访问树隐藏。1440x900 与 1024x768 无横向溢出或可见元素越界。
 
 The deployed Dashboard passes route, locale, theme, drawer, and responsive checks. Rail actions and drawer controls expose accessible names, while the visual scrim stays outside the accessibility tree.
+
+## 2026-07-23 会话媒体与视频预览 / Conversation Media and Video Preview
+
+实例会话会解析 Agent 消息中的本地图片和视频引用，并通过 Run 文件预览接口获取短期内联票据。视频使用原生 `<video controls playsInline>`，保持 16:9 容器、metadata 预加载、失败重试和下载兜底。普通附件继续使用文件标签展示。
+
+实例文件页支持 `video` 预览模式，图片、视频、PDF、文本继续使用独立渲染分支。支持 `mp4/webm/mov/m4v/ogv/ogg` 路径识别，实际播放范围取决于客户端解码能力。
+
+Instance conversations and file previews render authorized local videos through short-lived inline tickets. Media parsing remains scoped to the active run target path, and unsupported or failed playback retains a direct download path.
+
+```bash
+pnpm typecheck
+pnpm lint
+pnpm test:message-media
+pnpm build
+```

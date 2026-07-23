@@ -34,6 +34,7 @@ import { useDashboardAuthStore } from "../../stores/dashboardAuthStore";
 import { useDashboardUiStore } from "../../stores/dashboardUiStore";
 import { SessionCaptureDrawer } from "./SessionCaptureDrawer";
 import { NewInstanceDrawer } from "./NewInstanceDrawer";
+import { DashboardMessageContent } from "../../components/DashboardMessageContent";
 
 const instanceTabs: Array<{ key: InstanceTab; label: { zh: string; en: string } }> = [
   { key: "overview", label: { zh: "概览", en: "Overview" } },
@@ -878,6 +879,16 @@ function InstanceTabPanel({ instance, liveMode }: { instance: InstanceRecord; li
                       className="preview-media"
                       src={filePreviewQuery.data.downloadUrl}
                       alt={selectedFile.name}
+                    />
+                  </div>
+                ) : filePreviewQuery.data.mode === "video" && filePreviewQuery.data.downloadUrl ? (
+                  <div className="preview-media-shell preview-video-shell">
+                    <video
+                      className="preview-media preview-video"
+                      src={filePreviewQuery.data.downloadUrl}
+                      controls
+                      playsInline
+                      preload="metadata"
                     />
                   </div>
                 ) : filePreviewQuery.data.mode === "pdf" && filePreviewQuery.data.downloadUrl ? (
@@ -2846,20 +2857,14 @@ export function InstancesPage() {
                   <div className="message-title">{t(lang, message.title)}</div>
                   <div className="message-meta">{message.time}</div>
                 </div>
-                <div className="message-body">{t(lang, message.body)}</div>
-                {message.attachments?.length ? (
-                  <div className="message-attachment-list">
-                    {message.attachments.map((attachment) => (
-                      <div
-                        className="message-attachment-chip"
-                        key={`${attachment.path}-${attachment.label}`}
-                      >
-                        <div className="message-attachment-label">{attachment.label}</div>
-                        <div className="message-attachment-meta">{attachment.path}</div>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
+                <DashboardMessageContent
+                  attachments={message.attachments}
+                  enabled={liveMode}
+                  lang={lang}
+                  runId={instance.id}
+                  targetPath={instance.targetPath}
+                  text={t(lang, message.body)}
+                />
               </article>
             )) : null}
           </div>
